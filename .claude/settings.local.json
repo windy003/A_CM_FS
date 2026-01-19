@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(git clone:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(curl:*)",
+      "Bash(go version:*)",
+      "Bash(go mod tidy:*)"
+    ]
+  }
+}
