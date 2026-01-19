@@ -22,6 +22,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import mobile.Mobile
 import com.example.clashmeta.core.ClashVpnService
+import com.example.clashmeta.data.ProxySelectionManager
+import androidx.compose.ui.platform.LocalContext
 
 data class ProxyInfo(
     val name: String = "",
@@ -32,6 +34,7 @@ data class ProxyInfo(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProxyScreen() {
+    val context = LocalContext.current
     var proxies by remember { mutableStateOf<Map<String, ProxyInfo>>(emptyMap()) }
     var isLoading by remember { mutableStateOf(true) }
     var selectedProxy by remember { mutableStateOf<String?>(null) }
@@ -82,16 +85,20 @@ fun ProxyScreen() {
     fun selectProxy(proxyName: String) {
         scope.launch {
             try {
+                var usedGroup = "🚀 节点选择"
                 withContext(Dispatchers.IO) {
                     try {
                         Mobile.selectProxy("🚀 节点选择", proxyName)
                         Log.d("ProxyScreen", "Selected proxy '$proxyName' in group '🚀 节点选择'")
                     } catch (e: Exception) {
                         Mobile.selectProxy("GLOBAL", proxyName)
+                        usedGroup = "GLOBAL"
                         Log.d("ProxyScreen", "Selected proxy '$proxyName' in group 'GLOBAL'")
                     }
                 }
                 selectedProxy = proxyName
+                // 保存节点选择到持久化存储
+                ProxySelectionManager.saveSelectedProxy(context, proxyName, usedGroup)
             } catch (e: Exception) {
                 Log.e("ProxyScreen", "Failed to select proxy: $proxyName", e)
                 errorMessage = "切换节点失败: ${e.message}"

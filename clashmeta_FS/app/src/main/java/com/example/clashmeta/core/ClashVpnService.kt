@@ -12,6 +12,7 @@ import com.example.clashmeta.MainActivity
 import com.example.clashmeta.R
 import com.example.clashmeta.data.AppProxyManager
 import com.example.clashmeta.data.ProxyMode
+import com.example.clashmeta.data.ProxySelectionManager
 import kotlinx.coroutines.*
 import mobile.Mobile
 import java.io.File
@@ -105,6 +106,9 @@ class ClashVpnService : VpnService() {
                     // 验证代理加载
                     val proxiesJson = Mobile.getProxies()
                     Log.d(TAG, "Loaded proxies: $proxiesJson")
+
+                    // 恢复之前选择的节点
+                    restoreProxySelection()
                 } else {
                     Log.d(TAG, "Config not found, using default config...")
                     val defaultConfig = createDefaultConfig()
@@ -209,6 +213,37 @@ class ClashVpnService : VpnService() {
 
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    /**
+     * 恢复之前保存的节点选择
+     */
+    private fun restoreProxySelection() {
+        val savedProxy = ProxySelectionManager.getSelectedProxy(this)
+        if (savedProxy.isNullOrEmpty()) {
+            Log.d(TAG, "No saved proxy selection to restore")
+            return
+        }
+
+        val groupName = ProxySelectionManager.getProxyGroup(this)
+        Log.d(TAG, "Restoring proxy selection: $savedProxy in group: $groupName")
+
+        serviceScope.launch {
+            // 等待一小段时间确保 Clash 核心完全启动
+            delay(500)
+            try {
+                try {
+                    Mobile.selectProxy(groupName, savedProxy)
+                    Log.d(TAG, "Successfully restored proxy: $savedProxy in group: $groupName")
+                } catch (e: Exception) {
+                    // 如果第一个组失败，尝试 GLOBAL
+                    Mobile.selectProxy("GLOBAL", savedProxy)
+                    Log.d(TAG, "Successfully restored proxy: $savedProxy in group: GLOBAL")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to restore proxy selection: $savedProxy", e)
+            }
+        }
     }
 
     private fun startForegroundNotification() {
