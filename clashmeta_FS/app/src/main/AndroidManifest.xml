@@ -61,16 +61,6 @@
                 android:value="vpn" />
         </service>
 
-        <!-- 开机自启广播 -->
-        <receiver
-            android:name=".core.BootReceiver"
-            android:enabled="true"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
-
         <!-- 快捷设置磁贴 -->
         <service
             android:name=".core.VpnTileService"
