@@ -27,6 +27,10 @@ class ClashVpnService : VpnService() {
 
         var isRunning = false
             private set
+
+        // 防止重复启动的标志
+        @Volatile
+        private var isStarting = false
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
@@ -50,6 +54,12 @@ class ClashVpnService : VpnService() {
             return
         }
 
+        if (isStarting) {
+            Log.d(TAG, "VPN is already starting, ignoring duplicate request")
+            return
+        }
+
+        isStarting = true
         Log.d(TAG, "Starting VPN...")
 
         // 启动前台通知
@@ -62,6 +72,7 @@ class ClashVpnService : VpnService() {
                 vpnInterface = establishVpn()
                 if (vpnInterface == null) {
                     Log.e(TAG, "Failed to establish VPN interface")
+                    isStarting = false
                     stopSelf()
                     return@launch
                 }
@@ -95,13 +106,14 @@ class ClashVpnService : VpnService() {
                     val fd = vpnInterface?.fd ?: -1
                     Log.d(TAG, "Starting TUN with fd: $fd")
                     if (fd > 0) {
-                        Mobile.startTun(fd.toLong(), 9000L)
+                        Mobile.startTun(fd.toLong(), 1500L)
                         Log.d(TAG, "TUN started successfully!")
                     } else {
                         Log.e(TAG, "Invalid VPN file descriptor: $fd")
                     }
 
                     isRunning = true
+                    isStarting = false
 
                     // 验证代理加载
                     val proxiesJson = Mobile.getProxies()
@@ -118,14 +130,16 @@ class ClashVpnService : VpnService() {
                     // 启动 TUN 设备
                     val fd = vpnInterface?.fd ?: -1
                     if (fd > 0) {
-                        Mobile.startTun(fd.toLong(), 9000L)
+                        Mobile.startTun(fd.toLong(), 1500L)
                     }
 
                     isRunning = true
+                    isStarting = false
                     Log.d(TAG, "Clash started with default config!")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error starting VPN", e)
+                isStarting = false
                 stopVpn()
             }
         }
@@ -134,11 +148,27 @@ class ClashVpnService : VpnService() {
     private fun establishVpn(): ParcelFileDescriptor? {
         val builder = Builder()
             .setSession("ClashMeta")
-            .setMtu(9000)
+            .setMtu(1500)
             .addAddress("172.19.0.1", 30)
-            .addRoute("0.0.0.0", 0)
             .addDnsServer("1.1.1.1")
             .addDnsServer("8.8.8.8")
+
+        // 添加路由，排除局域网流量（用于 Miracast 投屏等）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Android 13+ 支持 excludeRoute
+            builder.addRoute("0.0.0.0", 0)
+            builder.excludeRoute(android.net.IpPrefix(java.net.InetAddress.getByName("10.0.0.0"), 8))
+            builder.excludeRoute(android.net.IpPrefix(java.net.InetAddress.getByName("172.16.0.0"), 12))
+            builder.excludeRoute(android.net.IpPrefix(java.net.InetAddress.getByName("192.168.0.0"), 16))
+            builder.excludeRoute(android.net.IpPrefix(java.net.InetAddress.getByName("169.254.0.0"), 16))
+            builder.excludeRoute(android.net.IpPrefix(java.net.InetAddress.getByName("224.0.0.0"), 4))
+            Log.d(TAG, "Using excludeRoute for LAN bypass (Android 13+)")
+        } else {
+            // Android 12 及以下，手动添加公网路由，避开私有 IP 段
+            // 这会覆盖大部分公网 IP，同时让局域网流量绕过 VPN
+            addPublicNetworkRoutes(builder)
+            Log.d(TAG, "Using manual public routes for LAN bypass")
+        }
 
         // 应用分应用代理设置
         try {
@@ -192,8 +222,59 @@ class ClashVpnService : VpnService() {
         return builder.establish()
     }
 
+    /**
+     * 为 Android 12 及以下版本添加公网路由，排除私有 IP 段
+     * 这样局域网流量（如 Miracast 投屏）不会走 VPN
+     */
+    private fun addPublicNetworkRoutes(builder: Builder) {
+        // 排除以下私有/保留 IP 段:
+        // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 224.0.0.0/4
+
+        // 0.0.0.0/8 - 保留
+        builder.addRoute("1.0.0.0", 8)
+        builder.addRoute("2.0.0.0", 7)
+        builder.addRoute("4.0.0.0", 6)
+        builder.addRoute("8.0.0.0", 7)
+        // 跳过 10.0.0.0/8
+        builder.addRoute("11.0.0.0", 8)
+        builder.addRoute("12.0.0.0", 6)
+        builder.addRoute("16.0.0.0", 4)
+        builder.addRoute("32.0.0.0", 3)
+        builder.addRoute("64.0.0.0", 2)
+        builder.addRoute("128.0.0.0", 3)
+        builder.addRoute("160.0.0.0", 5)
+        // 跳过 169.254.0.0/16 (link-local)
+        builder.addRoute("168.0.0.0", 8)
+        builder.addRoute("170.0.0.0", 7)
+        // 跳过 172.16.0.0/12
+        builder.addRoute("172.0.0.0", 12)
+        builder.addRoute("172.32.0.0", 11)
+        builder.addRoute("172.64.0.0", 10)
+        builder.addRoute("172.128.0.0", 9)
+        builder.addRoute("173.0.0.0", 8)
+        builder.addRoute("174.0.0.0", 7)
+        builder.addRoute("176.0.0.0", 4)
+        builder.addRoute("192.0.0.0", 9)
+        builder.addRoute("192.128.0.0", 11)
+        builder.addRoute("192.160.0.0", 13)
+        // 跳过 192.168.0.0/16
+        builder.addRoute("192.169.0.0", 16)
+        builder.addRoute("192.170.0.0", 15)
+        builder.addRoute("192.172.0.0", 14)
+        builder.addRoute("192.176.0.0", 12)
+        builder.addRoute("192.192.0.0", 10)
+        builder.addRoute("193.0.0.0", 8)
+        builder.addRoute("194.0.0.0", 7)
+        builder.addRoute("196.0.0.0", 6)
+        builder.addRoute("200.0.0.0", 5)
+        builder.addRoute("208.0.0.0", 4)
+        // 跳过 224.0.0.0/4 (多播)
+        // 跳过 240.0.0.0/4 (保留)
+    }
+
     private fun stopVpn() {
         isRunning = false
+        isStarting = false
 
         serviceScope.launch {
             try {
