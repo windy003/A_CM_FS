@@ -154,21 +154,9 @@ class ClashVpnService : VpnService() {
             .addDnsServer("8.8.8.8")
 
         // 添加路由，排除局域网流量（用于 Miracast 投屏等）
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Android 13+ 支持 excludeRoute
-            builder.addRoute("0.0.0.0", 0)
-            builder.excludeRoute(android.net.IpPrefix(java.net.InetAddress.getByName("10.0.0.0"), 8))
-            builder.excludeRoute(android.net.IpPrefix(java.net.InetAddress.getByName("172.16.0.0"), 12))
-            builder.excludeRoute(android.net.IpPrefix(java.net.InetAddress.getByName("192.168.0.0"), 16))
-            builder.excludeRoute(android.net.IpPrefix(java.net.InetAddress.getByName("169.254.0.0"), 16))
-            builder.excludeRoute(android.net.IpPrefix(java.net.InetAddress.getByName("224.0.0.0"), 4))
-            Log.d(TAG, "Using excludeRoute for LAN bypass (Android 13+)")
-        } else {
-            // Android 12 及以下，手动添加公网路由，避开私有 IP 段
-            // 这会覆盖大部分公网 IP，同时让局域网流量绕过 VPN
-            addPublicNetworkRoutes(builder)
-            Log.d(TAG, "Using manual public routes for LAN bypass")
-        }
+        // 使用手动添加公网路由的方式，避开私有 IP 段
+        addPublicNetworkRoutes(builder)
+        Log.d(TAG, "Using public routes for LAN bypass")
 
         // 应用分应用代理设置
         try {
