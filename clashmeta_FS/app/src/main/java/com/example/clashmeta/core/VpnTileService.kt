@@ -1,11 +1,12 @@
 package com.example.clashmeta.core
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.drawable.Icon
 import android.net.VpnService
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.util.Log
@@ -16,29 +17,54 @@ import com.example.clashmeta.R
 @RequiresApi(Build.VERSION_CODES.N)
 class VpnTileService : TileService() {
 
-    private val handler = Handler(Looper.getMainLooper())
-    private val updateRunnable = object : Runnable {
-        override fun run() {
-            updateTile()
-            handler.postDelayed(this, 1000) // 每秒更新一次
+    // 检测是否是 LG Wing（需要反转状态的设备）
+    private val isLGWing: Boolean by lazy {
+        val manufacturer = Build.MANUFACTURER.lowercase()
+        val model = Build.MODEL.lowercase().replace("-", "")
+        val isLG = manufacturer.contains("lg") && (model.contains("wing") || model.contains("lmf100"))
+        Log.d("VpnTileService", "Device: $manufacturer ${Build.MODEL}, normalized: $model, isLGWing: $isLG")
+        isLG
+    }
+
+    private val stateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == ClashVpnService.ACTION_VPN_STATE_CHANGED) {
+                val isRunning = intent.getBooleanExtra(ClashVpnService.EXTRA_IS_RUNNING, false)
+                Log.d("VpnTileService", "Received broadcast: isRunning=$isRunning")
+                updateTile()
+            }
         }
     }
 
     override fun onStartListening() {
         super.onStartListening()
+        // 注册广播接收器
+        val filter = IntentFilter(ClashVpnService.ACTION_VPN_STATE_CHANGED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(stateReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(stateReceiver, filter)
+        }
+        Log.d("VpnTileService", "Broadcast receiver registered")
         updateTile()
-        handler.post(updateRunnable) // 启动定时更新
     }
 
     override fun onStopListening() {
         super.onStopListening()
-        handler.removeCallbacks(updateRunnable) // 停止定时更新
+        // 注销广播接收器
+        try {
+            unregisterReceiver(stateReceiver)
+            Log.d("VpnTileService", "Broadcast receiver unregistered")
+        } catch (e: Exception) {
+            Log.w("VpnTileService", "Failed to unregister receiver", e)
+        }
     }
 
     override fun onClick() {
         super.onClick()
 
-        if (ClashVpnService.isRunning) {
+        val isRunning = ClashVpnService.isVpnRunning(this)
+        if (isRunning) {
             // 停止 VPN
             Log.d("VpnTileService", "Stopping VPN from tile")
             val intent = Intent(this, ClashVpnService::class.java).apply {
@@ -70,7 +96,7 @@ class VpnTileService : TileService() {
             }
         }
 
-        // 状态会由定时更新自动同步
+        // 状态会由广播自动同步
     }
 
     override fun onTileAdded() {
@@ -78,21 +104,26 @@ class VpnTileService : TileService() {
         updateTile()
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        handler.removeCallbacks(updateRunnable) // 清理资源
-    }
-
     private fun updateTile() {
         qsTile?.let { tile ->
+            // 使用跨进程方法读取 VPN 状态
+            val isRunning = ClashVpnService.isVpnRunning(this)
+
+            // 始终使用同一个图标，通过 STATE 控制高亮/灰色
             tile.icon = Icon.createWithResource(this, R.drawable.ic_tile_f)
-            tile.label = "ClashMeta"
-            val isRunning = ClashVpnService.isRunning
-            // VPN 运行时磁贴为灰色(INACTIVE)，未运行时为高亮(ACTIVE)
-            // 根据实际测试调整状态映射
-            tile.state = if (isRunning) Tile.STATE_INACTIVE else Tile.STATE_ACTIVE
+            tile.label = if (isRunning) "ClashMeta (运行中)" else "ClashMeta"
+
+            // LG Wing 的状态显示逻辑与其他设备相反
+            tile.state = if (isLGWing) {
+                // LG Wing: 运行时显示 INACTIVE（灰色），停止时显示 ACTIVE（高亮）
+                if (isRunning) Tile.STATE_INACTIVE else Tile.STATE_ACTIVE
+            } else {
+                // 其他设备: 运行时显示 ACTIVE（高亮），停止时显示 INACTIVE（灰色）
+                if (isRunning) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+            }
+
             tile.updateTile()
-            Log.d("VpnTileService", "Tile updated: isRunning=$isRunning, state=${tile.state}")
+            Log.d("VpnTileService", "Tile updated: isRunning=$isRunning, isLGWing=$isLGWing, state=${tile.state}")
         }
     }
 }

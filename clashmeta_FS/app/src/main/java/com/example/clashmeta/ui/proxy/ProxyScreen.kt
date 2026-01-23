@@ -109,7 +109,7 @@ fun ProxyScreen() {
     LaunchedEffect(Unit) {
         while (true) {
             try {
-                val isVpnRunning = ClashVpnService.isRunning
+                val isVpnRunning = ClashVpnService.isVpnRunning(context)
                 Log.d("ProxyScreen", "VPN running: $isVpnRunning")
 
                 if (isVpnRunning) {

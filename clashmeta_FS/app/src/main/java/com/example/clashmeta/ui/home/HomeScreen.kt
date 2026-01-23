@@ -13,6 +13,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import android.os.Build
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.clashmeta.core.ClashVpnService
@@ -23,12 +25,35 @@ fun HomeScreen(
     onStartVpn: () -> Unit,
     onStopVpn: () -> Unit
 ) {
-    var isConnected by remember { mutableStateOf(ClashVpnService.isRunning) }
+    val context = LocalContext.current
+    var isConnected by remember { mutableStateOf(ClashVpnService.isVpnRunning(context)) }
+
+    // 设备信息
+    val deviceInfo = remember {
+        val manufacturer = Build.MANUFACTURER
+        val model = Build.MODEL
+        val modelNormalized = model.lowercase().replace("-", "")
+        val isLGWing = manufacturer.lowercase().contains("lg") &&
+                      (modelNormalized.contains("wing") || modelNormalized.contains("lmf100"))
+        buildString {
+            append("当前设备: $manufacturer $model")
+            if (isLGWing) append(" (LG Wing)")
+        }
+    }
+
+    // 磁贴配置信息
+    val tileConfigInfo = remember {
+        val manufacturer = Build.MANUFACTURER.lowercase()
+        val model = Build.MODEL.lowercase().replace("-", "")
+        val isLGWing = manufacturer.contains("lg") &&
+                      (model.contains("wing") || model.contains("lmf100"))
+        "磁贴状态配置: ${if (isLGWing) "反转模式 (LG Wing)" else "正常模式"}"
+    }
 
     // 定时刷新状态
     LaunchedEffect(Unit) {
         while (true) {
-            isConnected = ClashVpnService.isRunning
+            isConnected = ClashVpnService.isVpnRunning(context)
             delay(1000)
         }
     }
@@ -59,6 +84,24 @@ fun HomeScreen(
                 text = if (isConnected) "已连接" else "未连接",
                 fontSize = 18.sp,
                 color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // 设备信息
+            Text(
+                text = deviceInfo,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.outline
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 磁贴配置信息
+            Text(
+                text = tileConfigInfo,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.outline
             )
         }
     }

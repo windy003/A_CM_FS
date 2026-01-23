@@ -24,17 +24,47 @@ class ClashVpnService : VpnService() {
     companion object {
         const val ACTION_START = "com.example.clashmeta.START_VPN"
         const val ACTION_STOP = "com.example.clashmeta.STOP_VPN"
+        const val ACTION_VPN_STATE_CHANGED = "com.example.clashmeta.VPN_STATE_CHANGED"
+        const val EXTRA_IS_RUNNING = "is_running"
+
+        private const val PREFS_NAME = "vpn_state"
+        private const val KEY_IS_RUNNING = "is_running"
 
         var isRunning = false
-            private set
+            private set(value) {
+                field = value
+            }
 
         // 防止重复启动的标志
         @Volatile
         private var isStarting = false
+
+        // 跨进程读取 VPN 运行状态
+        fun isVpnRunning(context: android.content.Context): Boolean {
+            return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_IS_RUNNING, false)
+        }
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    private fun setRunningState(running: Boolean) {
+        isRunning = running
+        // 保存到 SharedPreferences 供磁贴服务跨进程读取
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_IS_RUNNING, running)
+            .apply()
+
+        // 发送广播通知状态变化
+        val intent = Intent(ACTION_VPN_STATE_CHANGED).apply {
+            putExtra(EXTRA_IS_RUNNING, running)
+            setPackage(packageName) // 限制在本应用内
+        }
+        sendBroadcast(intent)
+        Log.d(TAG, "VPN running state set to: $running, broadcast sent")
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -112,7 +142,7 @@ class ClashVpnService : VpnService() {
                         Log.e(TAG, "Invalid VPN file descriptor: $fd")
                     }
 
-                    isRunning = true
+                    setRunningState(true)
                     isStarting = false
 
                     // 验证代理加载
@@ -133,7 +163,7 @@ class ClashVpnService : VpnService() {
                         Mobile.startTun(fd.toLong(), 1500L)
                     }
 
-                    isRunning = true
+                    setRunningState(true)
                     isStarting = false
                     Log.d(TAG, "Clash started with default config!")
                 }
@@ -261,7 +291,7 @@ class ClashVpnService : VpnService() {
     }
 
     private fun stopVpn() {
-        isRunning = false
+        setRunningState(false)
         isStarting = false
 
         serviceScope.launch {
