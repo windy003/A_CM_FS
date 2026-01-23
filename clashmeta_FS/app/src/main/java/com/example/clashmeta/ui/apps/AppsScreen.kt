@@ -219,7 +219,7 @@ fun AppsScreen(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        items(filteredApps, key = { it.packageName }) { app ->
+                        items(filteredApps) { app ->
                             AppItem(
                                 app = app,
                                 isSelected = config.selectedApps.contains(app.packageName),
@@ -326,7 +326,7 @@ fun AppItem(
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
-    var icon by remember { mutableStateOf<Drawable?>(null) }
+    var icon by remember(app.packageName) { mutableStateOf<Drawable?>(null) }
 
     LaunchedEffect(app.packageName) {
         withContext(Dispatchers.IO) {
