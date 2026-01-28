@@ -15,9 +15,7 @@ import androidx.compose.ui.Modifier
 import com.example.clashmeta.core.ClashVpnService
 import com.example.clashmeta.ui.MainScreen
 import com.example.clashmeta.ui.theme.ClashMetaTheme
-import dagger.hilt.android.AndroidEntryPoint
 
-@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
     private val vpnPermissionLauncher = registerForActivityResult(
