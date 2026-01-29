@@ -40,6 +40,9 @@ object SubscriptionManager {
         val file = getSubscriptionsFile(context)
         file.parentFile?.mkdirs()
         file.writeText(gson.toJson(subscriptions))
+
+        // 自动备份到外部存储
+        BackupManager.backupSubscriptions(context)
     }
 
     fun addSubscription(context: Context, subscription: Subscription) {

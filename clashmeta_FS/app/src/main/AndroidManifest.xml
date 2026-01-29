@@ -22,6 +22,12 @@
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
+    <!-- 外部存储权限（用于备份数据，卸载后保留） -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <!-- 声明需要查询的 intent（Android 11+ 包可见性） -->
     <queries>
         <!-- 查询有桌面图标的应用 -->
@@ -43,6 +49,7 @@
     <application
         android:name=".ClashMetaApp"
         android:allowBackup="true"
+        android:hasFragileUserData="true"
         android:icon="@drawable/a2048x2048"
         android:label="@string/app_name"
         android:roundIcon="@drawable/a2048x2048"

@@ -4,6 +4,8 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import android.util.Log
+import com.example.clashmeta.data.BackupManager
 import mobile.Mobile
 import java.io.File
 
@@ -12,6 +14,7 @@ class ClashMetaApp : Application() {
     companion object {
         const val NOTIFICATION_CHANNEL_ID = "clash_vpn_channel"
         const val NOTIFICATION_ID = 1
+        private const val TAG = "ClashMetaApp"
 
         lateinit var instance: ClashMetaApp
             private set
@@ -21,11 +24,32 @@ class ClashMetaApp : Application() {
         super.onCreate()
         instance = this
 
+        // 尝试从外部存储恢复备份（卸载重装后）
+        restoreBackupIfNeeded()
+
         // 初始化 Clash 核心
         initClashCore()
 
         // 创建通知渠道
         createNotificationChannel()
+    }
+
+    /**
+     * 检查并从外部存储恢复备份
+     */
+    private fun restoreBackupIfNeeded() {
+        try {
+            val clashDir = File(filesDir, "clash")
+            if (!clashDir.exists()) {
+                clashDir.mkdirs()
+            }
+            val restored = BackupManager.restoreFromBackup(this, clashDir)
+            if (restored) {
+                Log.d(TAG, "Data restored from external backup")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to restore backup", e)
+        }
     }
 
     private fun initClashCore() {

@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.clashmeta.ClashMetaApp
+import com.example.clashmeta.data.BackupManager
 import com.example.clashmeta.data.Subscription
 import com.example.clashmeta.data.SubscriptionManager
 import kotlinx.coroutines.Dispatchers
@@ -75,6 +76,8 @@ fun ProfileScreen() {
                     // 保存激活的配置ID
                     File(ClashMetaApp.instance.getClashDir(), "active_config.txt")
                         .writeText(subscription.id)
+                    // 备份到外部存储
+                    BackupManager.backupConfig(context, ClashMetaApp.instance.getClashDir())
                 }
 
                 activeConfigId = subscription.id
@@ -121,6 +124,9 @@ fun ProfileScreen() {
                         // VPN可能没运行
                     }
                 }
+
+                // 备份到外部存储
+                BackupManager.backupConfig(context, ClashMetaApp.instance.getClashDir())
 
                 Toast.makeText(context, "更新成功: ${subscription.name}", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
@@ -250,6 +256,9 @@ fun ProfileScreen() {
 
                         SubscriptionManager.addSubscription(context, subscription)
                         subscriptions = SubscriptionManager.loadSubscriptions(context)
+
+                        // 备份配置文件
+                        BackupManager.backupConfig(context, ClashMetaApp.instance.getClashDir())
 
                         // 如果是第一个订阅，自动设为当前配置
                         if (subscriptions.size == 1) {
