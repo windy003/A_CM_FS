@@ -2,8 +2,10 @@ package com.example.clashmeta.ui.settings
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.DocumentsContract
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -174,15 +176,28 @@ fun SettingsScreen(
                         // 导出按钮
                         OutlinedButton(
                             onClick = {
-                                val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                                    addCategory(Intent.CATEGORY_OPENABLE)
-                                    type = "application/zip"
-                                    putExtra(Intent.EXTRA_TITLE, "clashmeta_backup.zip")
-                                    // 允许选择任意位置
-                                    putExtra(DocumentsContract.EXTRA_INITIAL_URI,
-                                        Uri.parse("content://com.android.externalstorage.documents/document/primary:"))
+                                // 检查 Android 11+ 是否有管理所有文件的权限
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+                                    Toast.makeText(context, "请授予管理所有文件的权限", Toast.LENGTH_LONG).show()
+                                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                                        data = Uri.parse("package:${context.packageName}")
+                                    }
+                                    context.startActivity(intent)
+                                    return@OutlinedButton
                                 }
-                                exportLauncher.launch(intent)
+
+                                scope.launch {
+                                    isBackingUp = true
+                                    val success = withContext(Dispatchers.IO) {
+                                        exportBackupToFixedPath(context)
+                                    }
+                                    isBackingUp = false
+                                    if (success) {
+                                        Toast.makeText(context, "备份成功: /sdcard/1/clashMeta_FS/backup.zip", Toast.LENGTH_LONG).show()
+                                    } else {
+                                        Toast.makeText(context, "备份失败，请检查存储权限", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
                             },
                             enabled = !isBackingUp && !isRestoring,
                             modifier = Modifier.weight(1f)
@@ -235,7 +250,70 @@ fun SettingsScreen(
 }
 
 /**
- * 导出备份到 zip 文件
+ * 导出备份到固定路径 /sdcard/1/clashMeta_FS/backup.zip
+ */
+private fun exportBackupToFixedPath(context: android.content.Context): Boolean {
+    return try {
+        val clashDir = ClashMetaApp.instance.getClashDir()
+
+        // 创建目标目录
+        val backupDir = File("/sdcard/1/clashMeta_FS")
+        if (!backupDir.exists()) {
+            backupDir.mkdirs()
+        }
+
+        // 目标文件（覆盖写入）
+        val backupFile = File(backupDir, "backup.zip")
+
+        ZipOutputStream(backupFile.outputStream()).use { zip ->
+            // 备份 subscriptions.json
+            val subscriptionsFile = SubscriptionManager.getSubscriptionsFile(context)
+            if (subscriptionsFile.exists()) {
+                zip.putNextEntry(ZipEntry("subscriptions.json"))
+                zip.write(subscriptionsFile.readBytes())
+                zip.closeEntry()
+            }
+
+            // 备份 config.yaml
+            val configFile = File(clashDir, "config.yaml")
+            if (configFile.exists()) {
+                zip.putNextEntry(ZipEntry("config.yaml"))
+                zip.write(configFile.readBytes())
+                zip.closeEntry()
+            }
+
+            // 备份所有订阅文件 sub_*.yaml
+            clashDir.listFiles()?.filter { it.name.startsWith("sub_") && it.name.endsWith(".yaml") }?.forEach { file ->
+                zip.putNextEntry(ZipEntry(file.name))
+                zip.write(file.readBytes())
+                zip.closeEntry()
+            }
+
+            // 备份 active_config.txt
+            val activeConfigFile = File(clashDir, "active_config.txt")
+            if (activeConfigFile.exists()) {
+                zip.putNextEntry(ZipEntry("active_config.txt"))
+                zip.write(activeConfigFile.readBytes())
+                zip.closeEntry()
+            }
+
+            // 备份分应用代理配置
+            val appProxyFile = File(clashDir, "app_proxy_config.json")
+            if (appProxyFile.exists()) {
+                zip.putNextEntry(ZipEntry("app_proxy_config.json"))
+                zip.write(appProxyFile.readBytes())
+                zip.closeEntry()
+            }
+        }
+        true
+    } catch (e: Exception) {
+        e.printStackTrace()
+        false
+    }
+}
+
+/**
+ * 导出备份到 zip 文件（通过 Uri）
  */
 private fun exportBackup(context: android.content.Context, uri: Uri): Boolean {
     return try {
