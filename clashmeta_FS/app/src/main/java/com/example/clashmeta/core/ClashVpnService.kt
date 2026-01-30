@@ -198,7 +198,7 @@ class ClashVpnService : VpnService() {
 
         // 应用分应用代理设置
         try {
-            val config = AppProxyManager.loadConfig(this)
+            val config = AppProxyManager.loadConfig()
             Log.d(TAG, "App proxy mode: ${config.mode}, selected apps: ${config.selectedApps.size}")
 
             when (config.mode) {

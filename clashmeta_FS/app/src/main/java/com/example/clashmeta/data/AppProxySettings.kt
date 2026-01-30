@@ -9,7 +9,6 @@ import android.graphics.drawable.Drawable
 import android.os.Build
 import android.util.Log
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import java.io.File
 
 data class AppInfo(
@@ -33,12 +32,12 @@ object AppProxyManager {
     private const val CONFIG_FILE = "app_proxy_config.json"
     private val gson = Gson()
 
-    private fun getConfigFile(context: Context): File {
-        return File(context.filesDir, "clash/$CONFIG_FILE")
+    private fun getConfigFile(): File {
+        return File("/sdcard/1/clashMeta_FS", CONFIG_FILE)
     }
 
-    fun loadConfig(context: Context): AppProxyConfig {
-        val file = getConfigFile(context)
+    fun loadConfig(): AppProxyConfig {
+        val file = getConfigFile()
         if (!file.exists()) {
             return AppProxyConfig()
         }
@@ -50,8 +49,8 @@ object AppProxyManager {
         }
     }
 
-    fun saveConfig(context: Context, config: AppProxyConfig) {
-        val file = getConfigFile(context)
+    fun saveConfig(config: AppProxyConfig) {
+        val file = getConfigFile()
         file.parentFile?.mkdirs()
         file.writeText(gson.toJson(config))
     }

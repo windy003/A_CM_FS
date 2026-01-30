@@ -24,7 +24,7 @@ fun SettingsScreen(
 
     LaunchedEffect(Unit) {
         // 加载分应用代理配置信息
-        val config = AppProxyManager.loadConfig(context)
+        val config = AppProxyManager.loadConfig()
         appProxyInfo = when (config.mode) {
             ProxyMode.PROXY_ALL -> "代理所有应用"
             ProxyMode.BYPASS_SELECTED -> "绕过 ${config.selectedApps.size} 个应用"

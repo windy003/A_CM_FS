@@ -44,7 +44,7 @@ fun AppsScreen(
     // 加载应用列表和配置
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
-            config = AppProxyManager.loadConfig(context)
+            config = AppProxyManager.loadConfig()
             apps = AppProxyManager.getInstalledApps(context)
         }
         isLoading = false
@@ -54,7 +54,7 @@ fun AppsScreen(
     fun saveConfig() {
         scope.launch {
             withContext(Dispatchers.IO) {
-                AppProxyManager.saveConfig(context, config)
+                AppProxyManager.saveConfig(config)
             }
             Toast.makeText(context, "已保存，重启 VPN 生效", Toast.LENGTH_SHORT).show()
         }
