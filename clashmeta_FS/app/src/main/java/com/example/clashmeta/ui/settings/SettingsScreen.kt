@@ -221,7 +221,28 @@ fun SettingsScreen(
                         // 导入按钮
                         Button(
                             onClick = {
-                                importLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+                                // 检查 Android 11+ 是否有管理所有文件的权限
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+                                    Toast.makeText(context, "请授予管理所有文件的权限", Toast.LENGTH_LONG).show()
+                                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                                        data = Uri.parse("package:${context.packageName}")
+                                    }
+                                    context.startActivity(intent)
+                                    return@Button
+                                }
+
+                                scope.launch {
+                                    isRestoring = true
+                                    val result = withContext(Dispatchers.IO) {
+                                        importBackupFromFixedPath(context)
+                                    }
+                                    isRestoring = false
+                                    when (result) {
+                                        1 -> Toast.makeText(context, "恢复成功，请重启应用", Toast.LENGTH_LONG).show()
+                                        0 -> Toast.makeText(context, "恢复失败，文件格式错误", Toast.LENGTH_SHORT).show()
+                                        -1 -> Toast.makeText(context, "备份文件不存在: /sdcard/1/clashMeta_FS/backup.zip", Toast.LENGTH_LONG).show()
+                                    }
+                                }
                             },
                             enabled = !isBackingUp && !isRestoring,
                             modifier = Modifier.weight(1f)
@@ -368,7 +389,53 @@ private fun exportBackup(context: android.content.Context, uri: Uri): Boolean {
 }
 
 /**
- * 从 zip 文件导入备份
+ * 从固定路径导入备份 /sdcard/1/clashMeta_FS/backup.zip
+ * @return 1=成功, 0=失败, -1=文件不存在
+ */
+private fun importBackupFromFixedPath(context: android.content.Context): Int {
+    val backupFile = File("/sdcard/1/clashMeta_FS/backup.zip")
+    if (!backupFile.exists()) {
+        return -1
+    }
+
+    return try {
+        val clashDir = ClashMetaApp.instance.getClashDir()
+        if (!clashDir.exists()) clashDir.mkdirs()
+
+        ZipInputStream(backupFile.inputStream()).use { zip ->
+            var entry: ZipEntry? = zip.nextEntry
+            var hasContent = false
+
+            while (entry != null) {
+                val fileName = entry.name
+                val destFile = when {
+                    fileName == "subscriptions.json" -> SubscriptionManager.getSubscriptionsFile(context)
+                    fileName == "config.yaml" -> File(clashDir, "config.yaml")
+                    fileName == "active_config.txt" -> File(clashDir, "active_config.txt")
+                    fileName == "app_proxy_config.json" -> File(clashDir, "app_proxy_config.json")
+                    fileName.startsWith("sub_") && fileName.endsWith(".yaml") -> File(clashDir, fileName)
+                    else -> null
+                }
+
+                if (destFile != null) {
+                    destFile.parentFile?.mkdirs()
+                    destFile.writeBytes(zip.readBytes())
+                    hasContent = true
+                }
+
+                zip.closeEntry()
+                entry = zip.nextEntry
+            }
+            if (hasContent) 1 else 0
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        0
+    }
+}
+
+/**
+ * 从 zip 文件导入备份（通过 Uri）
  */
 private fun importBackup(context: android.content.Context, uri: Uri): Boolean {
     return try {
