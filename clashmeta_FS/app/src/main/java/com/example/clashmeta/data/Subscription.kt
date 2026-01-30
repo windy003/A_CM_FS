@@ -1,6 +1,7 @@
 package com.example.clashmeta.data
 
 import android.content.Context
+import com.example.clashmeta.ClashMetaApp
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.io.File
@@ -19,7 +20,7 @@ object SubscriptionManager {
     private val gson = Gson()
 
     fun getSubscriptionsFile(context: Context): File {
-        return File(context.filesDir, "clash/$SUBSCRIPTIONS_FILE")
+        return File(ClashMetaApp.CLASH_DIR_PATH, SUBSCRIPTIONS_FILE)
     }
 
     fun loadSubscriptions(context: Context): MutableList<Subscription> {
@@ -40,9 +41,6 @@ object SubscriptionManager {
         val file = getSubscriptionsFile(context)
         file.parentFile?.mkdirs()
         file.writeText(gson.toJson(subscriptions))
-
-        // 自动备份到外部存储
-        BackupManager.backupSubscriptions(context)
     }
 
     fun addSubscription(context: Context, subscription: Subscription) {

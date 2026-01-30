@@ -5,7 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
 import android.util.Log
-import com.example.clashmeta.data.BackupManager
 import mobile.Mobile
 import java.io.File
 
@@ -15,6 +14,8 @@ class ClashMetaApp : Application() {
         const val NOTIFICATION_CHANNEL_ID = "clash_vpn_channel"
         const val NOTIFICATION_ID = 1
         private const val TAG = "ClashMetaApp"
+        // 直接使用外部存储目录
+        const val CLASH_DIR_PATH = "/sdcard/1/clashMeta_FS"
 
         lateinit var instance: ClashMetaApp
             private set
@@ -24,9 +25,6 @@ class ClashMetaApp : Application() {
         super.onCreate()
         instance = this
 
-        // 尝试从外部存储恢复备份（卸载重装后）
-        restoreBackupIfNeeded()
-
         // 初始化 Clash 核心
         initClashCore()
 
@@ -34,31 +32,12 @@ class ClashMetaApp : Application() {
         createNotificationChannel()
     }
 
-    /**
-     * 检查并从外部存储恢复备份
-     */
-    private fun restoreBackupIfNeeded() {
+    private fun initClashCore() {
         try {
-            val clashDir = File(filesDir, "clash")
+            val clashDir = getClashDir()
             if (!clashDir.exists()) {
                 clashDir.mkdirs()
             }
-            val restored = BackupManager.restoreFromBackup(this, clashDir)
-            if (restored) {
-                Log.d(TAG, "Data restored from external backup")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to restore backup", e)
-        }
-    }
-
-    private fun initClashCore() {
-        val clashDir = File(filesDir, "clash")
-        if (!clashDir.exists()) {
-            clashDir.mkdirs()
-        }
-
-        try {
             Mobile.init(clashDir.absolutePath)
         } catch (e: Exception) {
             e.printStackTrace()
@@ -81,7 +60,7 @@ class ClashMetaApp : Application() {
         }
     }
 
-    fun getClashDir(): File = File(filesDir, "clash")
+    fun getClashDir(): File = File(CLASH_DIR_PATH)
 
     fun getConfigFile(): File = File(getClashDir(), "config.yaml")
 }

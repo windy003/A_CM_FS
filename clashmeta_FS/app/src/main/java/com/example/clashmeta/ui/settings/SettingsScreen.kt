@@ -1,14 +1,5 @@
 package com.example.clashmeta.ui.settings
 
-import android.content.Intent
-import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.provider.DocumentsContract
-import android.provider.Settings
-import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -22,14 +13,6 @@ import androidx.compose.ui.unit.dp
 import com.example.clashmeta.ClashMetaApp
 import com.example.clashmeta.data.AppProxyManager
 import com.example.clashmeta.data.ProxyMode
-import com.example.clashmeta.data.SubscriptionManager
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
-import java.util.zip.ZipOutputStream
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,51 +20,7 @@ fun SettingsScreen(
     onNavigateToApps: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var appProxyInfo by remember { mutableStateOf("") }
-    var isBackingUp by remember { mutableStateOf(false) }
-    var isRestoring by remember { mutableStateOf(false) }
-
-    // 导出文件选择器
-    val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val uri = result.data?.data
-        if (uri != null) {
-            scope.launch {
-                isBackingUp = true
-                val success = withContext(Dispatchers.IO) {
-                    exportBackup(context, uri)
-                }
-                isBackingUp = false
-                if (success) {
-                    Toast.makeText(context, "备份成功", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, "备份失败", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-    }
-
-    // 导入文件选择器
-    val importLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                isRestoring = true
-                val success = withContext(Dispatchers.IO) {
-                    importBackup(context, uri)
-                }
-                isRestoring = false
-                if (success) {
-                    Toast.makeText(context, "恢复成功，请重启应用", Toast.LENGTH_LONG).show()
-                } else {
-                    Toast.makeText(context, "恢复失败，文件格式错误", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-    }
 
     LaunchedEffect(Unit) {
         // 加载分应用代理配置信息
@@ -147,331 +86,42 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // 数据备份与恢复
-            Text(
-                text = "数据备份",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-
+            // 数据存储位置提示
             Card(
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "导出配置文件，卸载重装后可导入恢复",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
+                    Icon(
+                        imageVector = Icons.Default.Folder,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
                     )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.width(16.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        // 导出按钮
-                        OutlinedButton(
-                            onClick = {
-                                // 检查 Android 11+ 是否有管理所有文件的权限
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
-                                    Toast.makeText(context, "请授予管理所有文件的权限", Toast.LENGTH_LONG).show()
-                                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                                        data = Uri.parse("package:${context.packageName}")
-                                    }
-                                    context.startActivity(intent)
-                                    return@OutlinedButton
-                                }
-
-                                scope.launch {
-                                    isBackingUp = true
-                                    val success = withContext(Dispatchers.IO) {
-                                        exportBackupToFixedPath(context)
-                                    }
-                                    isBackingUp = false
-                                    if (success) {
-                                        Toast.makeText(context, "备份成功: /sdcard/1/clashMeta_FS/backup.zip", Toast.LENGTH_LONG).show()
-                                    } else {
-                                        Toast.makeText(context, "备份失败，请检查存储权限", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            },
-                            enabled = !isBackingUp && !isRestoring,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            if (isBackingUp) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Default.Upload,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("导出")
-                        }
-
-                        // 导入按钮
-                        Button(
-                            onClick = {
-                                // 检查 Android 11+ 是否有管理所有文件的权限
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
-                                    Toast.makeText(context, "请授予管理所有文件的权限", Toast.LENGTH_LONG).show()
-                                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                                        data = Uri.parse("package:${context.packageName}")
-                                    }
-                                    context.startActivity(intent)
-                                    return@Button
-                                }
-
-                                scope.launch {
-                                    isRestoring = true
-                                    val result = withContext(Dispatchers.IO) {
-                                        importBackupFromFixedPath(context)
-                                    }
-                                    isRestoring = false
-                                    when (result) {
-                                        1 -> Toast.makeText(context, "恢复成功，请重启应用", Toast.LENGTH_LONG).show()
-                                        0 -> Toast.makeText(context, "恢复失败，文件格式错误", Toast.LENGTH_SHORT).show()
-                                        -1 -> Toast.makeText(context, "备份文件不存在: /sdcard/1/clashMeta_FS/backup.zip", Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                            },
-                            enabled = !isBackingUp && !isRestoring,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            if (isRestoring) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.onPrimary
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Default.Download,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("导入")
-                        }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "数据存储位置",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                        Text(
+                            text = ClashMetaApp.CLASH_DIR_PATH,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                        Text(
+                            text = "卸载应用后数据不会丢失",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
             }
         }
-    }
-}
-
-/**
- * 导出备份到固定路径 /sdcard/1/clashMeta_FS/backup.zip
- */
-private fun exportBackupToFixedPath(context: android.content.Context): Boolean {
-    return try {
-        val clashDir = ClashMetaApp.instance.getClashDir()
-
-        // 创建目标目录
-        val backupDir = File("/sdcard/1/clashMeta_FS")
-        if (!backupDir.exists()) {
-            backupDir.mkdirs()
-        }
-
-        // 目标文件（覆盖写入）
-        val backupFile = File(backupDir, "backup.zip")
-
-        ZipOutputStream(backupFile.outputStream()).use { zip ->
-            // 备份 subscriptions.json
-            val subscriptionsFile = SubscriptionManager.getSubscriptionsFile(context)
-            if (subscriptionsFile.exists()) {
-                zip.putNextEntry(ZipEntry("subscriptions.json"))
-                zip.write(subscriptionsFile.readBytes())
-                zip.closeEntry()
-            }
-
-            // 备份 config.yaml
-            val configFile = File(clashDir, "config.yaml")
-            if (configFile.exists()) {
-                zip.putNextEntry(ZipEntry("config.yaml"))
-                zip.write(configFile.readBytes())
-                zip.closeEntry()
-            }
-
-            // 备份所有订阅文件 sub_*.yaml
-            clashDir.listFiles()?.filter { it.name.startsWith("sub_") && it.name.endsWith(".yaml") }?.forEach { file ->
-                zip.putNextEntry(ZipEntry(file.name))
-                zip.write(file.readBytes())
-                zip.closeEntry()
-            }
-
-            // 备份 active_config.txt
-            val activeConfigFile = File(clashDir, "active_config.txt")
-            if (activeConfigFile.exists()) {
-                zip.putNextEntry(ZipEntry("active_config.txt"))
-                zip.write(activeConfigFile.readBytes())
-                zip.closeEntry()
-            }
-
-            // 备份分应用代理配置
-            val appProxyFile = File(clashDir, "app_proxy_config.json")
-            if (appProxyFile.exists()) {
-                zip.putNextEntry(ZipEntry("app_proxy_config.json"))
-                zip.write(appProxyFile.readBytes())
-                zip.closeEntry()
-            }
-        }
-        true
-    } catch (e: Exception) {
-        e.printStackTrace()
-        false
-    }
-}
-
-/**
- * 导出备份到 zip 文件（通过 Uri）
- */
-private fun exportBackup(context: android.content.Context, uri: Uri): Boolean {
-    return try {
-        val clashDir = ClashMetaApp.instance.getClashDir()
-        val outputStream = context.contentResolver.openOutputStream(uri) ?: return false
-
-        ZipOutputStream(outputStream).use { zip ->
-            // 备份 subscriptions.json
-            val subscriptionsFile = SubscriptionManager.getSubscriptionsFile(context)
-            if (subscriptionsFile.exists()) {
-                zip.putNextEntry(ZipEntry("subscriptions.json"))
-                zip.write(subscriptionsFile.readBytes())
-                zip.closeEntry()
-            }
-
-            // 备份 config.yaml
-            val configFile = File(clashDir, "config.yaml")
-            if (configFile.exists()) {
-                zip.putNextEntry(ZipEntry("config.yaml"))
-                zip.write(configFile.readBytes())
-                zip.closeEntry()
-            }
-
-            // 备份所有订阅文件 sub_*.yaml
-            clashDir.listFiles()?.filter { it.name.startsWith("sub_") && it.name.endsWith(".yaml") }?.forEach { file ->
-                zip.putNextEntry(ZipEntry(file.name))
-                zip.write(file.readBytes())
-                zip.closeEntry()
-            }
-
-            // 备份 active_config.txt
-            val activeConfigFile = File(clashDir, "active_config.txt")
-            if (activeConfigFile.exists()) {
-                zip.putNextEntry(ZipEntry("active_config.txt"))
-                zip.write(activeConfigFile.readBytes())
-                zip.closeEntry()
-            }
-
-            // 备份分应用代理配置
-            val appProxyFile = File(clashDir, "app_proxy_config.json")
-            if (appProxyFile.exists()) {
-                zip.putNextEntry(ZipEntry("app_proxy_config.json"))
-                zip.write(appProxyFile.readBytes())
-                zip.closeEntry()
-            }
-        }
-        true
-    } catch (e: Exception) {
-        e.printStackTrace()
-        false
-    }
-}
-
-/**
- * 从固定路径导入备份 /sdcard/1/clashMeta_FS/backup.zip
- * @return 1=成功, 0=失败, -1=文件不存在
- */
-private fun importBackupFromFixedPath(context: android.content.Context): Int {
-    val backupFile = File("/sdcard/1/clashMeta_FS/backup.zip")
-    if (!backupFile.exists()) {
-        return -1
-    }
-
-    return try {
-        val clashDir = ClashMetaApp.instance.getClashDir()
-        if (!clashDir.exists()) clashDir.mkdirs()
-
-        ZipInputStream(backupFile.inputStream()).use { zip ->
-            var entry: ZipEntry? = zip.nextEntry
-            var hasContent = false
-
-            while (entry != null) {
-                val fileName = entry.name
-                val destFile = when {
-                    fileName == "subscriptions.json" -> SubscriptionManager.getSubscriptionsFile(context)
-                    fileName == "config.yaml" -> File(clashDir, "config.yaml")
-                    fileName == "active_config.txt" -> File(clashDir, "active_config.txt")
-                    fileName == "app_proxy_config.json" -> File(clashDir, "app_proxy_config.json")
-                    fileName.startsWith("sub_") && fileName.endsWith(".yaml") -> File(clashDir, fileName)
-                    else -> null
-                }
-
-                if (destFile != null) {
-                    destFile.parentFile?.mkdirs()
-                    destFile.writeBytes(zip.readBytes())
-                    hasContent = true
-                }
-
-                zip.closeEntry()
-                entry = zip.nextEntry
-            }
-            if (hasContent) 1 else 0
-        }
-    } catch (e: Exception) {
-        e.printStackTrace()
-        0
-    }
-}
-
-/**
- * 从 zip 文件导入备份（通过 Uri）
- */
-private fun importBackup(context: android.content.Context, uri: Uri): Boolean {
-    return try {
-        val clashDir = ClashMetaApp.instance.getClashDir()
-        if (!clashDir.exists()) clashDir.mkdirs()
-
-        val inputStream = context.contentResolver.openInputStream(uri) ?: return false
-
-        ZipInputStream(inputStream).use { zip ->
-            var entry: ZipEntry? = zip.nextEntry
-            var hasContent = false
-
-            while (entry != null) {
-                val fileName = entry.name
-                val destFile = when {
-                    fileName == "subscriptions.json" -> SubscriptionManager.getSubscriptionsFile(context)
-                    fileName == "config.yaml" -> File(clashDir, "config.yaml")
-                    fileName == "active_config.txt" -> File(clashDir, "active_config.txt")
-                    fileName == "app_proxy_config.json" -> File(clashDir, "app_proxy_config.json")
-                    fileName.startsWith("sub_") && fileName.endsWith(".yaml") -> File(clashDir, fileName)
-                    else -> null
-                }
-
-                if (destFile != null) {
-                    destFile.parentFile?.mkdirs()
-                    destFile.writeBytes(zip.readBytes())
-                    hasContent = true
-                }
-
-                zip.closeEntry()
-                entry = zip.nextEntry
-            }
-            hasContent
-        }
-    } catch (e: Exception) {
-        e.printStackTrace()
-        false
     }
 }
