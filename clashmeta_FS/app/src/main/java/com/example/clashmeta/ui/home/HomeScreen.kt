@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.clashmeta.core.ClashVpnService
+import com.example.clashmeta.data.ProxySelectionManager
 import kotlinx.coroutines.delay
 
 @Composable
@@ -27,6 +28,7 @@ fun HomeScreen(
 ) {
     val context = LocalContext.current
     var isConnected by remember { mutableStateOf(ClashVpnService.isVpnRunning(context)) }
+    var selectedProxy by remember { mutableStateOf(ProxySelectionManager.getSelectedProxy(context)) }
 
     // 设备信息
     val deviceInfo = remember {
@@ -47,13 +49,20 @@ fun HomeScreen(
         val model = Build.MODEL.lowercase().replace("-", "")
         val isLGWing = manufacturer.contains("lg") &&
                       (model.contains("wing") || model.contains("lmf100"))
-        "磁贴状态配置: ${if (isLGWing) "反转模式 (LG Wing)" else "正常模式"}"
+        val isSamsung = manufacturer.contains("samsung")
+        val modeLabel = when {
+            isLGWing -> "反转模式 (LG Wing)"
+            isSamsung -> "反转模式 (Samsung)"
+            else -> "正常模式"
+        }
+        "磁贴状态配置: $modeLabel"
     }
 
     // 定时刷新状态
     LaunchedEffect(Unit) {
         while (true) {
             isConnected = ClashVpnService.isVpnRunning(context)
+            selectedProxy = ProxySelectionManager.getSelectedProxy(context)
             delay(1000)
         }
     }
@@ -85,6 +94,17 @@ fun HomeScreen(
                 fontSize = 18.sp,
                 color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
             )
+
+            // 当前节点名称（仅连接时显示）
+            if (isConnected && !selectedProxy.isNullOrEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "节点: $selectedProxy",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 

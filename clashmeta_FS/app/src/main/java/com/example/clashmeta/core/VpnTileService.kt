@@ -17,13 +17,16 @@ import com.example.clashmeta.R
 @RequiresApi(Build.VERSION_CODES.N)
 class VpnTileService : TileService() {
 
-    // 检测是否是 LG Wing（需要反转状态的设备）
-    private val isLGWing: Boolean by lazy {
+    // 检测是否需要反转磁贴状态的设备
+    // Samsung One UI 和 LG Wing 的 STATE_ACTIVE/INACTIVE 视觉含义与 AOSP 相反
+    private val needsInvertedState: Boolean by lazy {
         val manufacturer = Build.MANUFACTURER.lowercase()
         val model = Build.MODEL.lowercase().replace("-", "")
-        val isLG = manufacturer.contains("lg") && (model.contains("wing") || model.contains("lmf100"))
-        Log.d("VpnTileService", "Device: $manufacturer ${Build.MODEL}, normalized: $model, isLGWing: $isLG")
-        isLG
+        val isLGWing = manufacturer.contains("lg") && (model.contains("wing") || model.contains("lmf100"))
+        val isSamsung = manufacturer.contains("samsung")
+        val result = isLGWing || isSamsung
+        Log.d("VpnTileService", "Device: $manufacturer ${Build.MODEL}, needsInvertedState: $result")
+        result
     }
 
     private val stateReceiver = object : BroadcastReceiver() {
@@ -31,7 +34,8 @@ class VpnTileService : TileService() {
             if (intent?.action == ClashVpnService.ACTION_VPN_STATE_CHANGED) {
                 val isRunning = intent.getBooleanExtra(ClashVpnService.EXTRA_IS_RUNNING, false)
                 Log.d("VpnTileService", "Received broadcast: isRunning=$isRunning")
-                updateTile()
+                // 直接使用广播携带的值，避免重读 SharedPreferences 的竞态条件
+                updateTileWithState(isRunning)
             }
         }
     }
@@ -105,25 +109,23 @@ class VpnTileService : TileService() {
     }
 
     private fun updateTile() {
-        qsTile?.let { tile ->
-            // 使用跨进程方法读取 VPN 状态
-            val isRunning = ClashVpnService.isVpnRunning(this)
+        updateTileWithState(ClashVpnService.isVpnRunning(this))
+    }
 
-            // 始终使用同一个图标，通过 STATE 控制高亮/灰色
+    private fun updateTileWithState(isRunning: Boolean) {
+        qsTile?.let { tile ->
             tile.icon = Icon.createWithResource(this, R.drawable.ic_tile_f)
             tile.label = if (isRunning) "ClashMeta (运行中)" else "ClashMeta"
 
-            // LG Wing 的状态显示逻辑与其他设备相反
-            tile.state = if (isLGWing) {
-                // LG Wing: 运行时显示 INACTIVE（灰色），停止时显示 ACTIVE（高亮）
+            // Samsung One UI 和 LG Wing 的状态显示逻辑与 AOSP 相反
+            tile.state = if (needsInvertedState) {
                 if (isRunning) Tile.STATE_INACTIVE else Tile.STATE_ACTIVE
             } else {
-                // 其他设备: 运行时显示 ACTIVE（高亮），停止时显示 INACTIVE（灰色）
                 if (isRunning) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
             }
 
             tile.updateTile()
-            Log.d("VpnTileService", "Tile updated: isRunning=$isRunning, isLGWing=$isLGWing, state=${tile.state}")
+            Log.d("VpnTileService", "Tile updated: isRunning=$isRunning, needsInvertedState=$needsInvertedState, state=${tile.state}")
         }
     }
 }
