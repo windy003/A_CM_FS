@@ -1,10 +1,12 @@
 package com.example.clashmeta.core
 
 import android.app.PendingIntent
+import android.content.ComponentName
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.service.quicksettings.TileService
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.clashmeta.ClashMetaApp
@@ -25,7 +27,9 @@ class ClashVpnService : VpnService() {
         const val ACTION_START = "com.example.clashmeta.START_VPN"
         const val ACTION_STOP = "com.example.clashmeta.STOP_VPN"
         const val ACTION_VPN_STATE_CHANGED = "com.example.clashmeta.VPN_STATE_CHANGED"
+        const val ACTION_UPDATE_NOTIFICATION = "com.example.clashmeta.UPDATE_NOTIFICATION"
         const val EXTRA_IS_RUNNING = "is_running"
+        const val EXTRA_PROXY_NAME = "proxy_name"
 
         private const val PREFS_NAME = "vpn_state"
         private const val KEY_IS_RUNNING = "is_running"
@@ -57,12 +61,14 @@ class ClashVpnService : VpnService() {
             .putBoolean(KEY_IS_RUNNING, running)
             .apply()
 
-        // 发送广播通知状态变化
+        // 发送广播通知状态变化（面板打开时磁贴可直接收到）
         val intent = Intent(ACTION_VPN_STATE_CHANGED).apply {
             putExtra(EXTRA_IS_RUNNING, running)
             setPackage(packageName) // 限制在本应用内
         }
         sendBroadcast(intent)
+        // 同时用 requestListeningState 唤醒磁贴（面板未打开时广播无法收到）
+        requestTileUpdate()
         Log.d(TAG, "VPN running state set to: $running, broadcast sent")
     }
 
@@ -74,6 +80,12 @@ class ClashVpnService : VpnService() {
         when (intent?.action) {
             ACTION_START -> startVpn()
             ACTION_STOP -> stopVpn()
+            ACTION_UPDATE_NOTIFICATION -> {
+                val proxyName = intent.getStringExtra(EXTRA_PROXY_NAME)
+                updateNotification(proxyName)
+                // requestListeningState 让磁贴服务主动重新读取节点名并刷新（ACTIVE_TILE=true 专用）
+                requestTileUpdate()
+            }
         }
         return START_STICKY
     }
@@ -347,28 +359,36 @@ class ClashVpnService : VpnService() {
                     Mobile.selectProxy("GLOBAL", savedProxy)
                     Log.d(TAG, "Successfully restored proxy: $savedProxy in group: GLOBAL")
                 }
+                // 恢复成功后更新通知和磁贴
+                updateNotification(savedProxy)
+                requestTileUpdate()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to restore proxy selection: $savedProxy", e)
             }
         }
     }
 
-    private fun startForegroundNotification() {
+    private fun buildNotification(proxyName: String? = null): android.app.Notification {
         val pendingIntent = PendingIntent.getActivity(
             this,
             0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE
         )
+        val displayProxy = proxyName ?: ProxySelectionManager.getSelectedProxy(this)
+        val contentText = if (!displayProxy.isNullOrEmpty()) "节点: $displayProxy" else "VPN 正在运行"
 
-        val notification = NotificationCompat.Builder(this, ClashMetaApp.NOTIFICATION_CHANNEL_ID)
+        return NotificationCompat.Builder(this, ClashMetaApp.NOTIFICATION_CHANNEL_ID)
             .setContentTitle("ClashMeta")
-            .setContentText("VPN 正在运行")
+            .setContentText(contentText)
             .setSmallIcon(R.drawable.ic_vpn)
             .setOngoing(true)
             .setContentIntent(pendingIntent)
             .build()
+    }
 
+    private fun startForegroundNotification() {
+        val notification = buildNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 ClashMetaApp.NOTIFICATION_ID,
@@ -378,6 +398,12 @@ class ClashVpnService : VpnService() {
         } else {
             startForeground(ClashMetaApp.NOTIFICATION_ID, notification)
         }
+    }
+
+    private fun updateNotification(proxyName: String? = null) {
+        val notification = buildNotification(proxyName)
+        val nm = getSystemService(android.app.NotificationManager::class.java)
+        nm.notify(ClashMetaApp.NOTIFICATION_ID, notification)
     }
 
     /**
@@ -465,6 +491,19 @@ class ClashVpnService : VpnService() {
             rules:
               - MATCH,DIRECT
         """.trimIndent()
+    }
+
+    /**
+     * 通知快速设置磁贴主动刷新自身（适用于 ACTIVE_TILE=true）
+     * 面板未打开时广播无法被收到，使用此方法代替广播触发磁贴更新
+     */
+    private fun requestTileUpdate() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            TileService.requestListeningState(
+                this,
+                ComponentName(this, VpnTileService::class.java)
+            )
+        }
     }
 
     override fun onDestroy() {

@@ -13,21 +13,10 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import com.example.clashmeta.MainActivity
 import com.example.clashmeta.R
+import com.example.clashmeta.data.ProxySelectionManager
 
 @RequiresApi(Build.VERSION_CODES.N)
 class VpnTileService : TileService() {
-
-    // 检测是否需要反转磁贴状态的设备
-    // Samsung One UI 和 LG Wing 的 STATE_ACTIVE/INACTIVE 视觉含义与 AOSP 相反
-    private val needsInvertedState: Boolean by lazy {
-        val manufacturer = Build.MANUFACTURER.lowercase()
-        val model = Build.MODEL.lowercase().replace("-", "")
-        val isLGWing = manufacturer.contains("lg") && (model.contains("wing") || model.contains("lmf100"))
-        val isSamsung = manufacturer.contains("samsung")
-        val result = isLGWing || isSamsung
-        Log.d("VpnTileService", "Device: $manufacturer ${Build.MODEL}, needsInvertedState: $result")
-        result
-    }
 
     private val stateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -115,17 +104,24 @@ class VpnTileService : TileService() {
     private fun updateTileWithState(isRunning: Boolean) {
         qsTile?.let { tile ->
             tile.icon = Icon.createWithResource(this, R.drawable.ic_tile_f)
-            tile.label = if (isRunning) "ClashMeta (运行中)" else "ClashMeta"
 
-            // Samsung One UI 和 LG Wing 的状态显示逻辑与 AOSP 相反
-            tile.state = if (needsInvertedState) {
-                if (isRunning) Tile.STATE_INACTIVE else Tile.STATE_ACTIVE
+            val proxyName = ProxySelectionManager.getSelectedProxy(this)
+            if (isRunning && !proxyName.isNullOrEmpty()) {
+                tile.label = proxyName
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    tile.subtitle = "运行中"
+                }
             } else {
-                if (isRunning) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+                tile.label = "ClashMeta"
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    tile.subtitle = if (isRunning) "运行中" else null
+                }
             }
 
+            tile.state = if (isRunning) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+
             tile.updateTile()
-            Log.d("VpnTileService", "Tile updated: isRunning=$isRunning, needsInvertedState=$needsInvertedState, state=${tile.state}")
+            Log.d("VpnTileService", "Tile updated: isRunning=$isRunning, proxy=$proxyName, state=${tile.state}")
         }
     }
 }

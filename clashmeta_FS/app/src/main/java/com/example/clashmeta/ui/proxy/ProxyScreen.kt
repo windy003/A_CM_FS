@@ -13,6 +13,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import android.content.Intent
+import android.os.Build
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -99,6 +101,18 @@ fun ProxyScreen() {
                 selectedProxy = proxyName
                 // 保存节点选择到持久化存储
                 ProxySelectionManager.saveSelectedProxy(context, proxyName, usedGroup)
+                // 通知 VPN 服务更新通知栏和磁贴显示
+                if (ClashVpnService.isVpnRunning(context)) {
+                    val intent = Intent(context, ClashVpnService::class.java).apply {
+                        action = ClashVpnService.ACTION_UPDATE_NOTIFICATION
+                        putExtra(ClashVpnService.EXTRA_PROXY_NAME, proxyName)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
+                }
             } catch (e: Exception) {
                 Log.e("ProxyScreen", "Failed to select proxy: $proxyName", e)
                 errorMessage = "切换节点失败: ${e.message}"
