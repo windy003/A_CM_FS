@@ -177,35 +177,6 @@ fun AppsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // 快捷操作
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    AssistChip(
-                        onClick = {
-                            config = config.copy(
-                                selectedApps = filteredApps.map { it.packageName }.toMutableSet()
-                            )
-                            saveConfig()
-                        },
-                        label = { Text("全选") },
-                        leadingIcon = { Icon(Icons.Default.SelectAll, contentDescription = null, modifier = Modifier.size(18.dp)) }
-                    )
-                    AssistChip(
-                        onClick = {
-                            config = config.copy(selectedApps = mutableSetOf())
-                            saveConfig()
-                        },
-                        label = { Text("清空") },
-                        leadingIcon = { Icon(Icons.Default.Deselect, contentDescription = null, modifier = Modifier.size(18.dp)) }
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
                 // 应用列表
                 if (isLoading) {
                     Box(
