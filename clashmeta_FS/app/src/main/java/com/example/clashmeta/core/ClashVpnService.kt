@@ -124,9 +124,6 @@ class ClashVpnService : VpnService() {
                 val clashDir = ClashMetaApp.instance.getClashDir()
                 Log.d(TAG, "Initializing Clash with home dir: ${clashDir.absolutePath}")
 
-                // 检查并清理可能损坏的 GeoIP 数据库文件
-                cleanupInvalidGeoFiles(clashDir)
-
                 try {
                     Mobile.init(clashDir.absolutePath)
                     Log.d(TAG, "Clash initialized successfully")
@@ -140,10 +137,6 @@ class ClashVpnService : VpnService() {
 
                 if (configFile.exists()) {
                     Log.d(TAG, "Starting Clash with config...")
-
-                    // 处理配置文件，移除 GEOIP 规则
-                    processConfigFile(configFile)
-
                     Log.d(TAG, "Config content preview: ${configFile.readText().take(500)}")
 
                     // 设置配置文件路径 (用于 reloadConfig)
@@ -404,64 +397,6 @@ class ClashVpnService : VpnService() {
         val notification = buildNotification(proxyName)
         val nm = getSystemService(android.app.NotificationManager::class.java)
         nm.notify(ClashMetaApp.NOTIFICATION_ID, notification)
-    }
-
-    /**
-     * 处理配置文件，移除 GEOIP 规则并禁用 geo 数据加载
-     */
-    private fun processConfigFile(configFile: File) {
-        try {
-            var content = configFile.readText()
-
-            // 1. 移除所有 GEOIP 规则行（将其替换为 DIRECT 或直接删除）
-            // 匹配类似 "- GEOIP,CN,DIRECT" 或 "  - GEOIP,LAN,DIRECT" 的行
-            val geoipRulePattern = Regex("""^\s*-\s*GEOIP\s*,.*$""", RegexOption.MULTILINE)
-            val originalContent = content
-            content = content.replace(geoipRulePattern, "")
-
-            // 清理多余的空行
-            content = content.replace(Regex("\n{3,}"), "\n\n")
-
-            // 2. 添加禁用 geodata 的配置（如果没有的话）
-            if (!content.contains("geodata-mode:")) {
-                // 在文件开头（第一个非注释行之后）添加 geodata-mode
-                val lines = content.lines().toMutableList()
-                var insertIndex = 0
-                for (i in lines.indices) {
-                    val line = lines[i].trim()
-                    if (line.isNotEmpty() && !line.startsWith("#")) {
-                        insertIndex = i
-                        break
-                    }
-                }
-                lines.add(insertIndex, "geodata-mode: false")
-                lines.add(insertIndex + 1, "geo-auto-update: false")
-                content = lines.joinToString("\n")
-            }
-
-            if (content != originalContent) {
-                configFile.writeText(content)
-                Log.d(TAG, "Config processed: removed GEOIP rules and disabled geo data")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to process config file", e)
-        }
-    }
-
-    /**
-     * 删除所有 GeoIP 数据库文件
-     * 因为我们已经移除了 GEOIP 规则，不需要这些文件
-     */
-    private fun cleanupInvalidGeoFiles(clashDir: File) {
-        val geoFiles = listOf("geoip.metadb", "geoip.db", "geosite.db", "geosite.dat", "GeoLite2-Country.mmdb", "Country.mmdb")
-
-        for (fileName in geoFiles) {
-            val file = File(clashDir, fileName)
-            if (file.exists()) {
-                Log.d(TAG, "Deleting geo file: $fileName")
-                file.delete()
-            }
-        }
     }
 
     private fun createDefaultConfig(): String {
