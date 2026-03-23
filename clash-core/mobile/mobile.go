@@ -16,6 +16,7 @@ import (
 	C "github.com/Dreamacro/clash/constant"
 	"github.com/Dreamacro/clash/hub/executor"
 	"github.com/Dreamacro/clash/listener/sing"
+	sing_tun "github.com/Dreamacro/clash/listener/sing_tun"
 	"github.com/Dreamacro/clash/log"
 	"github.com/Dreamacro/clash/tunnel"
 	"github.com/Dreamacro/clash/tunnel/statistic"
@@ -24,10 +25,10 @@ import (
 )
 
 var (
-	isRunning  bool
-	homeDir    string
-	tunStack   tun.Stack
-	tunDevice  tun.Tun
+	isRunning bool
+	homeDir   string
+	tunStack  tun.Stack
+	tunDevice tun.Tun
 )
 
 // Init 初始化 Clash，设置主目录
@@ -380,13 +381,10 @@ func StartTun(fd int, mtu int) error {
 		return fmt.Errorf("clash is not running, please start clash first")
 	}
 
-	// 设置日志级别为 debug 以便调试
-	log.SetLevel(log.DEBUG)
 	log.Infoln("[Mobile] Creating TUN with fd: %d, mtu: %d", fd, mtu)
 
 	inet4Addr, _ := netip.ParsePrefix("172.19.0.1/30")
 
-	// 直接使用 sing-tun 创建 TUN 设备，不使用 NetworkUpdateMonitor
 	tunOptions := tun.Options{
 		Name:           "tun0",
 		MTU:            uint32(mtu),
@@ -401,20 +399,22 @@ func StartTun(fd int, mtu int) error {
 		log.Errorln("[Mobile] Failed to create TUN device: %v", err)
 		return fmt.Errorf("create TUN device failed: %w", err)
 	}
-	log.Infoln("[Mobile] TUN device created successfully")
 
-	// 创建 TUN handler
-	handler := &sing.ListenerHandler{
-		Tunnel: tunnel.Tunnel,
-		Type:   C.TUN,
-		Additions: []inbound.Addition{
-			inbound.WithInName("DEFAULT-TUN"),
-			inbound.WithSpecialRules(""),
+	// 使用 sing_tun.ListenerHandler，支持 DNS 劫持（172.19.0.2:53）
+	dnsAddr, _ := netip.ParseAddrPort("172.19.0.2:53")
+	handler := &sing_tun.ListenerHandler{
+		ListenerHandler: sing.ListenerHandler{
+			Tunnel: tunnel.Tunnel,
+			Type:   C.TUN,
+			Additions: []inbound.Addition{
+				inbound.WithInName("DEFAULT-TUN"),
+				inbound.WithSpecialRules(""),
+			},
+			UDPTimeout: time.Second * 60,
 		},
-		UDPTimeout: time.Second * 60,
+		DnsAdds: []netip.AddrPort{dnsAddr},
 	}
 
-	// 创建 TUN stack
 	stackOptions := tun.StackOptions{
 		Context:      context.Background(),
 		Tun:          tunDevice,
@@ -444,7 +444,7 @@ func StartTun(fd int, mtu int) error {
 		return fmt.Errorf("start TUN stack failed: %w", err)
 	}
 
-	log.Infoln("[Mobile] TUN started successfully")
+	log.Infoln("[Mobile] TUN started successfully with DNS hijack at 172.19.0.2:53")
 	return nil
 }
 
