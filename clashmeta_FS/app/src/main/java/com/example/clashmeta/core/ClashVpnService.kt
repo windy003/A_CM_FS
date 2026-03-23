@@ -3,6 +3,7 @@ package com.example.clashmeta.core
 import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Intent
+import android.net.ProxyInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -191,14 +192,16 @@ class ClashVpnService : VpnService() {
     private fun establishVpn(): ParcelFileDescriptor? {
         val builder = Builder()
             .setSession("ClashMeta")
-            .setMtu(1500)
+            .setMtu(9000)
+            .setBlocking(false)
             .addAddress("172.19.0.1", 30)
-            .addDnsServer("1.1.1.1")
-            .addDnsServer("8.8.8.8")
+            .addDnsServer("172.19.0.2")  // TUN portal 地址，由 Clash 拦截处理 DNS
 
         // 添加路由，排除局域网流量（用于 Miracast 投屏等）
         // 使用手动添加公网路由的方式，避开私有 IP 段
         addPublicNetworkRoutes(builder)
+        // 为 DNS 地址单独加路由，确保 DNS 查询一定走 TUN
+        builder.addRoute("172.19.0.2", 32)
         Log.d(TAG, "Using public routes for LAN bypass")
 
         // 应用分应用代理设置
@@ -248,6 +251,16 @@ class ClashVpnService : VpnService() {
             Log.e(TAG, "Failed to apply app proxy settings", e)
             // 出错时默认排除自身
             builder.addDisallowedApplication(packageName)
+        }
+
+        // 设置系统 HTTP 代理，供 Opera 等读取系统代理的浏览器使用
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            builder.setHttpProxy(
+                ProxyInfo.buildDirectProxy(
+                    "127.0.0.1", 7890,
+                    listOf("localhost", "127.*", "10.*", "172.*", "192.168.*")
+                )
+            )
         }
 
         return builder.establish()
