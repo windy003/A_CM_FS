@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CM_View</string>
+
+    <!-- 底部导航 -->
+    <string name="nav_home">首页</string>
+    <string name="nav_proxy">代理</string>
+    <string name="nav_profile">配置</string>
+    <string name="nav_settings">设置</string>
+</resources>

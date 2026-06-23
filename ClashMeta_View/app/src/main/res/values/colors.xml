@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#6750A4</color>
+
+    <!-- 延迟颜色 -->
+    <color name="delay_fast">#4CAF50</color>
+    <color name="delay_medium">#FF9800</color>
+    <color name="delay_slow">#F44336</color>
+    <color name="delay_timeout">#9E9E9E</color>
+</resources>

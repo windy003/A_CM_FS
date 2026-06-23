@@ -1,7 +1,7 @@
-clashmeta_FS/build
-clashmeta_FS/.gradle
-clashmeta_FS/.idea
-clashmeta_FS/app/build
 .claude/
 
 
+ClashMeta_View/build
+ClashMeta_View/.gradle
+ClashMeta_View/.idea
+ClashMeta_View/app/build
