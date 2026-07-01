@@ -14,7 +14,8 @@ data class ProxyRow(val name: String, val info: ProxyInfo)
 
 class ProxyAdapter(
     private val onSelect: (String) -> Unit,
-    private val onTest: (String) -> Unit
+    private val onTest: (String) -> Unit,
+    private val onMenu: (String, View) -> Unit
 ) : RecyclerView.Adapter<ProxyAdapter.VH>() {
 
     private var rows: List<ProxyRow> = emptyList()
@@ -108,6 +109,9 @@ class ProxyAdapter(
             // 测试按钮
             binding.btnTest.isEnabled = !isTesting
             binding.btnTest.setOnClickListener { onTest(name) }
+
+            // 更多操作按钮（弹出菜单：复制节点信息等）
+            binding.btnMenu.setOnClickListener { onMenu(name, it) }
 
             // 点击整行选择节点
             binding.root.setOnClickListener { onSelect(name) }

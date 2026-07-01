@@ -11,4 +11,8 @@
         android:icon="@drawable/ic_refresh"
         android:title="刷新"
         app:showAsAction="always" />
+    <item
+        android:id="@+id/action_paste_proxy"
+        android:title="从剪贴板粘贴节点"
+        app:showAsAction="never" />
 </menu>

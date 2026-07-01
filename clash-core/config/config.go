@@ -672,6 +672,20 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 	for idx, mapping := range proxiesConfig {
 		proxy, err := adapter.ParseProxy(mapping)
 		if err != nil {
+			// 不支持的协议（如 anytls）：降级为同名占位节点，避免整份配置解析失败、
+			// 导致其余受支持的节点也全部加载不出来。引用该节点的 proxy-group 仍可正常
+			// 解析；选择该占位节点时会拒绝连接（不可用）。
+			name, _ := mapping["name"].(string)
+			if name != "" && strings.Contains(err.Error(), "unsupport proxy type") {
+				log.Warnln("[Config] skip unsupported proxy %q (index %d): %v", name, idx, err)
+				if _, exist := proxies[name]; exist {
+					return nil, nil, fmt.Errorf("proxy %s is the duplicate name", name)
+				}
+				proxies[name] = adapter.NewProxy(outbound.NewRejectWithOption(outbound.RejectOption{Name: name}))
+				proxyList = append(proxyList, name)
+				proxiesList.PushBack(mapping)
+				continue
+			}
 			return nil, nil, fmt.Errorf("proxy %d: %w", idx, err)
 		}
 

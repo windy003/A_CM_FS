@@ -15,3 +15,7 @@
 # Keep data classes
 -keep class com.example.clashmeta.data.** { *; }
 -keep class com.example.clashmeta.ui.proxy.ProxyInfo { *; }
+
+# Keep snakeyaml (节点复制/粘贴解析 config.yaml 用)
+-keep class org.yaml.snakeyaml.** { *; }
+-dontwarn org.yaml.snakeyaml.**

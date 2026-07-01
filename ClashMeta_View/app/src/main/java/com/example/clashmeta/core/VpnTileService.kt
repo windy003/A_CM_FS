@@ -18,12 +18,44 @@ import com.example.clashmeta.data.ProxySelectionManager
 @RequiresApi(Build.VERSION_CODES.N)
 class VpnTileService : TileService() {
 
+    companion object {
+        // 点击后记录用户的“意图状态”，避免在 VPN 异步启动/停止的过渡期读到过时的
+        // SharedPreferences 值。收到真实状态广播后清除。
+        @Volatile
+        private var pendingState: Boolean? = null
+        @Volatile
+        private var pendingStateTime: Long = 0L
+        // 过渡窗口：超过此时间仍未收到真实状态广播，则认为意图已失效
+        private const val PENDING_TIMEOUT_MS = 10_000L
+
+        private fun setPending(state: Boolean) {
+            pendingState = state
+            pendingStateTime = System.currentTimeMillis()
+        }
+
+        private fun clearPending() {
+            pendingState = null
+        }
+
+        /** 过渡期内返回意图状态，否则返回持久化的真实状态 */
+        private fun effectiveRunning(context: Context): Boolean {
+            val pending = pendingState
+            if (pending != null &&
+                System.currentTimeMillis() - pendingStateTime < PENDING_TIMEOUT_MS
+            ) {
+                return pending
+            }
+            return ClashVpnService.isVpnRunning(context)
+        }
+    }
+
     private val stateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == ClashVpnService.ACTION_VPN_STATE_CHANGED) {
                 val isRunning = intent.getBooleanExtra(ClashVpnService.EXTRA_IS_RUNNING, false)
                 Log.d("VpnTileService", "Received broadcast: isRunning=$isRunning")
-                // 直接使用广播携带的值，避免重读 SharedPreferences 的竞态条件
+                // 收到真实状态，清除意图并直接使用广播携带的值
+                clearPending()
                 updateTileWithState(isRunning)
             }
         }
@@ -56,9 +88,14 @@ class VpnTileService : TileService() {
     override fun onClick() {
         super.onClick()
 
-        val isRunning = ClashVpnService.isVpnRunning(this)
+        // 用“有效状态”判断：过渡期内以上次点击的意图为准，避免读到过时的持久化值
+        // 导致连点时把刚启动的 VPN 又停掉（或反之）。
+        val isRunning = effectiveRunning(this)
         if (isRunning) {
-            // 停止 VPN
+            // 立即乐观更新磁贴为“已关闭”，给用户即时反馈，避免重复点击
+            setPending(false)
+            updateTileWithState(false)
+
             Log.d("VpnTileService", "Stopping VPN from tile")
             val intent = Intent(this, ClashVpnService::class.java).apply {
                 action = ClashVpnService.ACTION_STOP
@@ -77,6 +114,10 @@ class VpnTileService : TileService() {
                 return
             }
 
+            // 立即乐观更新磁贴为“已开启”，给用户即时反馈，避免重复点击
+            setPending(true)
+            updateTileWithState(true)
+
             // 启动 VPN
             Log.d("VpnTileService", "Starting VPN from tile")
             val intent = Intent(this, ClashVpnService::class.java).apply {
@@ -89,7 +130,7 @@ class VpnTileService : TileService() {
             }
         }
 
-        // 状态会由广播自动同步
+        // 真实状态最终会由广播/requestListeningState 同步并清除意图
     }
 
     override fun onTileAdded() {
@@ -98,7 +139,8 @@ class VpnTileService : TileService() {
     }
 
     private fun updateTile() {
-        updateTileWithState(ClashVpnService.isVpnRunning(this))
+        // 过渡期内以意图状态为准，避免刷新时闪回过时状态
+        updateTileWithState(effectiveRunning(this))
     }
 
     private fun updateTileWithState(isRunning: Boolean) {

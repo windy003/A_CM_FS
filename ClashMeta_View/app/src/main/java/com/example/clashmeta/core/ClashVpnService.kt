@@ -49,10 +49,53 @@ class ClashVpnService : VpnService() {
             return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getBoolean(KEY_IS_RUNNING, false)
         }
+
+        /**
+         * 仅把配置加载进内核（不建立 VPN/TUN），用于未开启 VPN 时预览节点列表。
+         * - 内核未运行：setConfig + startWithPath 加载配置（GetProxies 即可返回节点）
+         * - 内核已运行但 VPN 未开（预览态）：reloadConfig 刷新为最新订阅
+         * - VPN 正在运行：无需处理，直接返回 true
+         * 返回 true 表示内核中已有可用代理数据。注意：需在 IO 线程调用。
+         */
+        fun ensureCoreLoadedForPreview(context: android.content.Context): Boolean {
+            return try {
+                val configFile = ClashMetaApp.instance.getConfigFile()
+                if (!configFile.exists()) return false
+                // 与正式启动保持一致的配置注入，避免解析差异
+                com.example.clashmeta.data.LanProxyManager.applyToConfigFile()
+                if (Mobile.isRunning()) {
+                    // 已在运行；若只是预览态则刷新配置以反映最新订阅
+                    if (!isVpnRunning(context)) {
+                        Mobile.setConfig(configFile.absolutePath)
+                        Mobile.reloadConfig()
+                    }
+                } else {
+                    Mobile.setConfig(configFile.absolutePath)
+                    Mobile.startWithPath(configFile.absolutePath)
+                }
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "ensureCoreLoadedForPreview failed", e)
+                false
+            }
+        }
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    // 专门用于停止时拆除 TUN 的作用域：绝不能在 onDestroy 里被取消，
+    // 否则 Mobile.stopTun() 可能在被调度前就取消，导致原生 TUN 不释放、锁图标残留。
+    private val stopScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    // 防止重复拆除
+    @Volatile
+    private var isStopping = false
+
+    // 标记 gomobile 是否已接管 TUN 的 fd。
+    // Mobile.startTun() 会直接接管并在 stopTun() 中关闭该 fd，
+    // 因此启动成功后 Java 侧不能再 close，否则会 double-close 导致 fdsan abort。
+    @Volatile
+    private var tunStarted = false
 
     private fun setRunningState(running: Boolean) {
         isRunning = running
@@ -103,6 +146,7 @@ class ClashVpnService : VpnService() {
         }
 
         isStarting = true
+        isStopping = false
         Log.d(TAG, "Starting VPN...")
 
         // 启动前台通知
@@ -147,14 +191,22 @@ class ClashVpnService : VpnService() {
                     // 设置配置文件路径 (用于 reloadConfig)
                     Mobile.setConfig(configFile.absolutePath)
 
-                    Mobile.startWithPath(configFile.absolutePath)
-                    Log.d(TAG, "Clash core started successfully!")
+                    // 内核可能已被“预览节点”提前加载，重复 startWithPath 会报错；
+                    // 已运行则改为重载当前配置，未运行才启动。
+                    if (Mobile.isRunning()) {
+                        Mobile.reloadConfig()
+                        Log.d(TAG, "Clash core already running (preview), reloaded config")
+                    } else {
+                        Mobile.startWithPath(configFile.absolutePath)
+                        Log.d(TAG, "Clash core started successfully!")
+                    }
 
                     // 启动 TUN 设备，将 VPN 流量转发到 Clash
                     val fd = vpnInterface?.fd ?: -1
                     Log.d(TAG, "Starting TUN with fd: $fd")
                     if (fd > 0) {
                         Mobile.startTun(fd.toLong(), 1500L)
+                        tunStarted = true  // gomobile 已接管 fd，停止时由 stopTun 关闭
                         Log.d(TAG, "TUN started successfully!")
                     } else {
                         Log.e(TAG, "Invalid VPN file descriptor: $fd")
@@ -175,12 +227,17 @@ class ClashVpnService : VpnService() {
                     configFile.writeText(defaultConfig)
                     // 按局域网代理开关注入 allow-lan / bind-address
                     com.example.clashmeta.data.LanProxyManager.applyToConfigFile()
-                    Mobile.startWithPath(configFile.absolutePath)
+                    if (Mobile.isRunning()) {
+                        Mobile.reloadConfig()
+                    } else {
+                        Mobile.startWithPath(configFile.absolutePath)
+                    }
 
                     // 启动 TUN 设备
                     val fd = vpnInterface?.fd ?: -1
                     if (fd > 0) {
                         Mobile.startTun(fd.toLong(), 1500L)
+                        tunStarted = true  // gomobile 已接管 fd，停止时由 stopTun 关闭
                     }
 
                     setRunningState(true)
@@ -325,27 +382,61 @@ class ClashVpnService : VpnService() {
     }
 
     private fun stopVpn() {
+        // 幂等：ACTION_STOP 已触发拆除时，onDestroy/onRevoke 的重复调用直接跳过
+        if (isStopping) {
+            Log.d(TAG, "stopVpn already in progress, skip")
+            return
+        }
+        isStopping = true
+
         setRunningState(false)
         isStarting = false
 
-        serviceScope.launch {
+        // 在不会被 onDestroy 取消的 stopScope 上拆除，确保 Mobile.stopTun() 一定执行。
+        // 先释放原生 TUN 并关闭 fd（这才能让系统及时移除状态栏 VPN 锁图标），
+        // 再在主线程移除前台通知并停止服务，最后才停 Clash 核心。
+        val nativeOwnsFd = tunStarted
+        tunStarted = false
+
+        stopScope.launch {
+            // 1) 释放 TUN —— gomobile 会在此关闭它接管的 fd，系统随即撤销 VPN、锁图标消失
+            if (nativeOwnsFd) {
+                try {
+                    Mobile.stopTun()
+                    Log.d(TAG, "TUN stopped")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error stopping TUN", e)
+                }
+                // fd 已由原生侧关闭：仅解除 Java 侧所有权，避免 double-close 触发 fdsan abort
+                try {
+                    vpnInterface?.detachFd()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error detaching vpn fd", e)
+                }
+            } else {
+                // TUN 从未启动，fd 仍归 Java 所有，需自行关闭
+                try {
+                    vpnInterface?.close()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error closing vpn interface", e)
+                }
+            }
+            vpnInterface = null
+
+            // 3) 收尾：移除前台通知、停止服务（切回主线程）
+            withContext(Dispatchers.Main) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+
+            // 4) 最后停 Clash 核心，慢一点也不再影响锁图标
             try {
-                // 先停止 TUN
-                Mobile.stopTun()
-                Log.d(TAG, "TUN stopped")
-                // 再停止 Clash 核心
                 Mobile.stop()
                 Log.d(TAG, "Clash stopped")
             } catch (e: Exception) {
                 Log.e(TAG, "Error stopping Clash", e)
             }
         }
-
-        vpnInterface?.close()
-        vpnInterface = null
-
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
     }
 
     /**
@@ -464,8 +555,9 @@ class ClashVpnService : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        serviceScope.cancel()
+        // 先确保拆除逻辑已启动（stopScope 不受下面的取消影响），再取消其它任务
         stopVpn()
+        serviceScope.cancel()
     }
 
     override fun onRevoke() {

@@ -450,13 +450,17 @@ func StartTun(fd int, mtu int) error {
 
 // StopTun 停止 TUN 设备
 func StopTun() {
-	if tunStack != nil {
-		tunStack.Close()
-		tunStack = nil
-	}
+	// 先关闭 TUN 设备释放 fd：这会让系统立即撤销 VPN 接口、移除状态栏锁图标。
+	// 协议栈(tunStack.Close)可能较慢（等待连接/goroutine 清理），放到后面做，
+	// 避免把锁图标的消失阻塞在慢操作后面。
 	if tunDevice != nil {
 		tunDevice.Close()
 		tunDevice = nil
+		log.Infoln("[Mobile] TUN device closed, fd released")
+	}
+	if tunStack != nil {
+		tunStack.Close()
+		tunStack = nil
 	}
 	log.Infoln("[Mobile] TUN stopped")
 }

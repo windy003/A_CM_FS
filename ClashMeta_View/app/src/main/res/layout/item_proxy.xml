@@ -85,6 +85,17 @@
             android:visibility="gone"
             android:contentDescription="已选择" />
 
+        <!-- 更多操作（复制节点信息等） -->
+        <ImageButton
+            android:id="@+id/btn_menu"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:layout_marginStart="4dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_more_vert"
+            app:tint="?android:attr/textColorSecondary"
+            android:contentDescription="更多操作" />
+
     </LinearLayout>
 
 </com.google.android.material.card.MaterialCardView>
