@@ -25,7 +25,12 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import mobile.Mobile
 
@@ -74,7 +79,7 @@ class ProxyFragment : Fragment() {
         binding.toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 com.example.clashmeta.R.id.action_test_all -> {
-                    testAllDelays(filteredProxies().map { it.name })
+                    testAllDelays(filteredProxies())
                     true
                 }
                 com.example.clashmeta.R.id.action_refresh -> {
@@ -354,20 +359,32 @@ class ProxyFragment : Fragment() {
         }
     }
 
-    private fun testAllDelays(proxyList: List<String>) {
+    private fun testAllDelays(proxyList: List<ProxyRow>) {
         if (isTestingAll) return
+        // 跳过服务器地址为占位符 8.8.8.8 的节点（通常是流量/到期信息节点）
+        val targets = proxyList.filter { it.info.server != PLACEHOLDER_SERVER }
+        if (targets.isEmpty()) return
         viewLifecycleOwner.lifecycleScope.launch {
             isTestingAll = true
-            for (proxyName in proxyList) {
-                try {
-                    val d = withContext(Dispatchers.IO) {
-                        Mobile.testDelay(proxyName, "https://www.gstatic.com/generate_204", 5000)
+            // 限制并发数，避免一次性发起过多连接拖垮内核
+            val semaphore = Semaphore(MAX_CONCURRENT_TESTS)
+            coroutineScope {
+                targets.map { row ->
+                    async(Dispatchers.IO) {
+                        semaphore.withPermit {
+                            val name = row.name
+                            val d = try {
+                                Mobile.testDelay(name, "https://www.gstatic.com/generate_204", 5000).toInt()
+                            } catch (e: Exception) {
+                                -1
+                            }
+                            adapter.delayResults[name] = d
+                            withContext(Dispatchers.Main) {
+                                if (_binding != null) adapter.notifyDataSetChanged()
+                            }
+                        }
                     }
-                    adapter.delayResults[proxyName] = d.toInt()
-                } catch (e: Exception) {
-                    adapter.delayResults[proxyName] = -1
-                }
-                adapter.notifyDataSetChanged()
+                }.awaitAll()
             }
             isTestingAll = false
         }
@@ -376,5 +393,12 @@ class ProxyFragment : Fragment() {
     override fun onDestroyView() {
         super.onDestroyView()
         _binding = null
+    }
+
+    companion object {
+        /** 占位节点的服务器地址（流量/到期等信息节点），测试延迟时跳过 */
+        private const val PLACEHOLDER_SERVER = "8.8.8.8"
+        /** 一键测速时的最大并发数 */
+        private const val MAX_CONCURRENT_TESTS = 16
     }
 }

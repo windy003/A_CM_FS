@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -169,9 +170,10 @@ func GetConfigDir() string {
 
 // ProxyInfo 代理信息
 type ProxyInfo struct {
-	Name  string `json:"name"`
-	Type  string `json:"type"`
-	Alive bool   `json:"alive"`
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+	Alive  bool   `json:"alive"`
+	Server string `json:"server"`
 }
 
 // GetProxies 获取所有代理信息 (JSON 格式)
@@ -180,10 +182,21 @@ func GetProxies() string {
 	result := make(map[string]ProxyInfo)
 
 	for name, proxy := range proxies {
+		// Addr() 形如 "host:port"，取出 host 作为服务器地址；
+		// 代理组等没有具体地址的返回空字符串
+		server := ""
+		if addr := proxy.Addr(); addr != "" {
+			if host, _, err := net.SplitHostPort(addr); err == nil {
+				server = host
+			} else {
+				server = addr
+			}
+		}
 		result[name] = ProxyInfo{
-			Name:  proxy.Name(),
-			Type:  proxy.Type().String(),
-			Alive: proxy.Alive(),
+			Name:   proxy.Name(),
+			Type:   proxy.Type().String(),
+			Alive:  proxy.Alive(),
+			Server: server,
 		}
 	}
 
