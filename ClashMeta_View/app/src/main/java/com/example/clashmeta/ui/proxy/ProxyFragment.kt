@@ -51,6 +51,10 @@ class ProxyFragment : Fragment() {
 
     private var loopJob: Job? = null
 
+    // 刚粘贴导入的节点名：下次渲染后自动滚动到它，避免因列表按名称排序（emoji/中文
+    // 排在末尾）而让用户以为“没导入”。
+    private var pendingScrollTo: String? = null
+
     private val groupTypes = listOf(
         "Selector", "Direct", "Reject", "Compatible", "Pass",
         "URLTest", "Fallback", "LoadBalance"
@@ -181,18 +185,60 @@ class ProxyFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
                 val configFile = ClashMetaApp.instance.getConfigFile()
+                // 备份导入前的配置：若内核加载失败需回滚，避免把坏配置留在磁盘上，
+                // 否则后续预览刷新/重启都会解析失败，导致所有节点都加载不出来。
+                val backup = if (configFile.exists()) configFile.readText() else null
+
                 val r = ProxyClipboard.importProxy(configFile, clip)
-                // 导入成功后让内核重新加载配置（预览态或 VPN 运行态都刷新）
-                if (r.isSuccess && Mobile.isRunning()) {
-                    try { Mobile.reloadConfig() } catch (e: Exception) {
-                        Log.e("ProxyFragment", "reloadConfig after paste failed", e)
+                if (r.isFailure) return@withContext r
+                val importedNames = r.getOrDefault(emptyList())
+
+                // 真正把新配置加载进内核，以此确认粘贴的节点确实可用。
+                // reloadConfig()/startWithPath() 在解析失败时会抛异常（如某个节点
+                // 字段非法会导致整份配置解析失败），此处必须捕获并如实反馈，
+                // 不能像原来那样吞掉错误却仍提示“导入成功”。
+                val loadError: Throwable? = try {
+                    Mobile.setConfig(configFile.absolutePath)
+                    if (Mobile.isRunning()) Mobile.reloadConfig()
+                    else Mobile.startWithPath(configFile.absolutePath)
+                    null
+                } catch (e: Exception) {
+                    Log.e("ProxyFragment", "reloadConfig after paste failed", e)
+                    e
+                }
+
+                // reload 成功也要核实：从内核实际读回代理列表，确认粘贴的节点真的在里面。
+                // 这样能区分“内核没加载成功”与“加载了但界面没刷新/被覆盖”等不同原因。
+                val loadedIntoCore: Boolean = if (loadError == null) {
+                    try {
+                        val json = Mobile.getProxies() ?: ""
+                        importedNames.all { name -> json.contains("\"${name}\"") }
+                    } catch (e: Exception) { false }
+                } else false
+
+                if (loadError != null || !loadedIntoCore) {
+                    // 回滚到导入前的配置，并让内核恢复到可用状态
+                    if (backup != null) {
+                        try {
+                            configFile.writeText(backup)
+                            if (Mobile.isRunning()) {
+                                Mobile.setConfig(configFile.absolutePath)
+                                Mobile.reloadConfig()
+                            }
+                        } catch (e: Exception) {
+                            Log.e("ProxyFragment", "rollback config after failed paste failed", e)
+                        }
                     }
+                    val reason = loadError?.message ?: "内核已重载但节点未出现（配置可能被订阅覆盖或写入未生效）"
+                    return@withContext Result.failure(IllegalArgumentException("节点未能真正导入：$reason"))
                 }
                 r
             }
             val c = context ?: return@launch
             result.onSuccess { names ->
                 Toast.makeText(c, "已粘贴 ${names.size} 个节点", Toast.LENGTH_SHORT).show()
+                // 记住刚导入的节点，渲染后滚动过去让用户立刻看到
+                pendingScrollTo = names.firstOrNull()
                 isLoading = proxies.isEmpty()
                 fetchProxies()
             }.onFailure { e ->
@@ -303,6 +349,18 @@ class ProxyFragment : Fragment() {
                 binding.recyclerProxy.visibility = View.VISIBLE
                 binding.emptyView.visibility = View.GONE
                 adapter.submit(list)
+
+                // 刚粘贴导入的节点：滚动到它的位置，让用户立刻看到（列表按名称字节序
+                // 排序，emoji/中文名会排到末尾，否则容易被误以为“没导入”）。
+                pendingScrollTo?.let { target ->
+                    val idx = list.indexOfFirst { it.name == target }
+                    if (idx >= 0) {
+                        binding.recyclerProxy.post {
+                            binding.recyclerProxy.smoothScrollToPosition(idx)
+                        }
+                    }
+                    pendingScrollTo = null
+                }
             }
         }
     }

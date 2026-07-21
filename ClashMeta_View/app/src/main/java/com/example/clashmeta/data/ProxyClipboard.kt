@@ -17,6 +17,33 @@ object ProxyClipboard {
 
     private const val TAG = "ProxyClipboard"
 
+    /**
+     * 无订阅时的最小可用配置底板：含一个 select 分组「🚀 节点选择」和 MATCH 规则，
+     * 使空环境下粘贴的节点会被加入该分组、可选择、且流量能走它。
+     * 分组名与 ProxyFragment 里查询当前选中节点用的名称保持一致。
+     */
+    private val DEFAULT_CONFIG = """
+        mixed-port: 7890
+        allow-lan: false
+        mode: rule
+        log-level: info
+        dns:
+          enable: true
+          enhanced-mode: fake-ip
+          fake-ip-range: 198.18.0.1/16
+          nameserver:
+            - 223.5.5.5
+            - 119.29.29.29
+        proxies: []
+        proxy-groups:
+          - name: "🚀 节点选择"
+            type: select
+            proxies:
+              - DIRECT
+        rules:
+          - MATCH,🚀 节点选择
+    """.trimIndent()
+
     private fun loader(): Yaml = Yaml()
 
     private fun flowDumper(): Yaml {
@@ -88,34 +115,47 @@ object ProxyClipboard {
 
     /**
      * 把剪贴板中的节点导入 config.yaml。
-     * - 追加到 proxies（同名则覆盖）
+     * - 始终新增到 proxies；若节点名已存在则自动加序号后缀（如“名字 (2)”），
+     *   保证每次粘贴都产生一个可见的新节点，且不会因重名导致内核解析失败。
      * - 加入所有 select 类型的 proxy-group，使其可见且可选择
-     * 返回导入成功的节点名列表；失败返回 Result.failure。
+     * 返回导入成功的（最终）节点名列表；失败返回 Result.failure。
      */
     @Suppress("UNCHECKED_CAST")
     fun importProxy(configFile: File, clip: String): Result<List<String>> {
         return try {
-            if (!configFile.exists()) {
-                return Result.failure(IllegalStateException("配置文件不存在，请先导入订阅"))
-            }
             val incoming = parseClip(clip)
             val valid = incoming.filter { it["name"] != null && it["type"] != null }
             if (valid.isEmpty()) {
                 return Result.failure(IllegalArgumentException("剪贴板内容不是有效的节点配置"))
             }
 
-            val root = (loader().load<Map<String, Any?>>(configFile.readText())
+            // 没有订阅（config.yaml 不存在）时，用一个带 select 分组的最小配置作底，
+            // 让空环境下也能粘贴出一个可用、可选择的节点。
+            val configText = if (configFile.exists()) configFile.readText() else DEFAULT_CONFIG
+            val root = (loader().load<Map<String, Any?>>(configText)
                 ?: linkedMapOf()).toMutableMap()
 
             val proxies = (root["proxies"] as? List<Map<String, Any?>>)?.toMutableList()
                 ?: mutableListOf()
 
+            // 已占用的节点名（含本次已导入的），用于生成唯一名
+            val usedNames = proxies.mapNotNull { it["name"]?.toString() }.toMutableSet()
+
             val importedNames = mutableListOf<String>()
             for (p in valid) {
-                val pName = p["name"].toString()
-                val idx = proxies.indexOfFirst { it["name"]?.toString() == pName }
-                if (idx >= 0) proxies[idx] = p else proxies.add(p)
-                importedNames.add(pName)
+                val baseName = p["name"].toString()
+                var name = baseName
+                var n = 2
+                while (usedNames.contains(name)) {
+                    name = "$baseName ($n)"
+                    n++
+                }
+                usedNames.add(name)
+                // 复制一份并改名，避免改动解析得到的原始 map
+                val node = LinkedHashMap<String, Any?>(p)
+                node["name"] = name
+                proxies.add(node)
+                importedNames.add(name)
             }
             root["proxies"] = proxies
 
