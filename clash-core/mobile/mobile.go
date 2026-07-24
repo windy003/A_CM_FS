@@ -439,7 +439,11 @@ func StartTun(fd int, mtu int) error {
 		Logger:       log.SingLogger,
 	}
 
-	tunStack, err = tun.NewStack("gvisor", stackOptions)
+	// 使用 mixed 栈：TCP 走 system 栈（交给内核 TCP，收发缓冲自动调优，可达 MB 级），
+	// UDP 仍走 gVisor（DNS 劫持路径不变）。
+	// 原来的 "gvisor" 栈把 TCP 收/发窗口硬编码为 20KB(sing-tun stack_gvisor.go)，
+	// 吞吐被 窗口/RTT 卡死（如 RTT 100ms 时仅 ~200KB/s），这是带宽只有几百 KB/s 的根因。
+	tunStack, err = tun.NewStack("mixed", stackOptions)
 	if err != nil {
 		tunDevice.Close()
 		tunDevice = nil

@@ -35,6 +35,11 @@ class ClashVpnService : VpnService() {
         private const val PREFS_NAME = "vpn_state"
         private const val KEY_IS_RUNNING = "is_running"
 
+        // TUN MTU：VPN 接口(setMtu) 与 sing-tun 协议栈(startTun) 必须一致，否则大包会被
+        // 截断/丢弃、下行按小 MTU 分段导致包数暴增，带宽会掉到几百 KB/s。
+        // 9000 与 v2rayNG/sing-box 在 Android 上的默认值一致，可显著提升吞吐。
+        private const val TUN_MTU = 9000
+
         var isRunning = false
             private set(value) {
                 field = value
@@ -205,7 +210,7 @@ class ClashVpnService : VpnService() {
                     val fd = vpnInterface?.fd ?: -1
                     Log.d(TAG, "Starting TUN with fd: $fd")
                     if (fd > 0) {
-                        Mobile.startTun(fd.toLong(), 1500L)
+                        Mobile.startTun(fd.toLong(), TUN_MTU.toLong())
                         tunStarted = true  // gomobile 已接管 fd，停止时由 stopTun 关闭
                         Log.d(TAG, "TUN started successfully!")
                     } else {
@@ -236,7 +241,7 @@ class ClashVpnService : VpnService() {
                     // 启动 TUN 设备
                     val fd = vpnInterface?.fd ?: -1
                     if (fd > 0) {
-                        Mobile.startTun(fd.toLong(), 1500L)
+                        Mobile.startTun(fd.toLong(), TUN_MTU.toLong())
                         tunStarted = true  // gomobile 已接管 fd，停止时由 stopTun 关闭
                     }
 
@@ -255,7 +260,7 @@ class ClashVpnService : VpnService() {
     private fun establishVpn(): ParcelFileDescriptor? {
         val builder = Builder()
             .setSession("ClashMeta")
-            .setMtu(9000)
+            .setMtu(TUN_MTU)
             .setBlocking(false)
             .addAddress("172.19.0.1", 30)
             .addDnsServer("172.19.0.2")  // TUN portal 地址，由 Clash 拦截处理 DNS
