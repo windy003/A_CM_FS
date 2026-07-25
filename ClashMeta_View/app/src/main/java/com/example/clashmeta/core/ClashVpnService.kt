@@ -35,9 +35,10 @@ class ClashVpnService : VpnService() {
         private const val PREFS_NAME = "vpn_state"
         private const val KEY_IS_RUNNING = "is_running"
 
-        // TUN MTU：VPN 接口(setMtu) 与 sing-tun 协议栈(startTun) 必须一致，否则大包会被
-        // 截断/丢弃、下行按小 MTU 分段导致包数暴增，带宽会掉到几百 KB/s。
-        // 9000 与 v2rayNG/sing-box 在 Android 上的默认值一致，可显著提升吞吐。
+        // TUN MTU：VPN 接口(setMtu) 与 sing-tun 协议栈(startTun) 必须一致。
+        // 用 9000（与官方 CMFA 一致）：配合 gvisor 栈可减少分包、提升 TCP 吞吐。
+        // 注：QUIC 自带路径 MTU 探测，数据报始终限制在 ~1200-1400 字节，不会因接口 MTU=9000
+        // 就发超大包，故不影响 TikTok 等走 QUIC 的加载（CMFA 同款配置即证明）。
         private const val TUN_MTU = 9000
 
         var isRunning = false

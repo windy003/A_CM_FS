@@ -439,11 +439,12 @@ func StartTun(fd int, mtu int) error {
 		Logger:       log.SingLogger,
 	}
 
-	// 使用 mixed 栈：TCP 走 system 栈（交给内核 TCP，收发缓冲自动调优，可达 MB 级），
-	// UDP 仍走 gVisor（DNS 劫持路径不变）。
-	// 原来的 "gvisor" 栈把 TCP 收/发窗口硬编码为 20KB(sing-tun stack_gvisor.go)，
-	// 吞吐被 窗口/RTT 卡死（如 RTT 100ms 时仅 ~200KB/s），这是带宽只有几百 KB/s 的根因。
-	tunStack, err = tun.NewStack("mixed", stackOptions)
+	// 使用 gvisor 栈（与官方 CMFA 一致）：TCP 和 UDP 都走 gVisor，UDP 回程可靠。
+	// 之前为提速改用 "mixed"（TCP 交内核 system 栈），结果 UDP 回程写不回 TUN、QUIC 全线失败，
+	// 表现为 YouTube 只能靠 TCP 回退、TikTok 图片(走 QUIC 且不回退)搜索页缩略图全灭。
+	// gvisor 的 TCP 吞吐由 TCPModerateReceiveBufferOption 自动调优 + 大 MTU(9000) 保证，
+	// 不再受 20KB 初始窗口限制（CMFA 同款配置：TCP 快、UDP 正常）。
+	tunStack, err = tun.NewStack("gvisor", stackOptions)
 	if err != nil {
 		tunDevice.Close()
 		tunDevice = nil
