@@ -32,11 +32,25 @@ object TikTokRuleManager {
 
     private val TOP_LEVEL_RULES = Regex("^rules:\\s*$")
     private val INLINE_EMPTY_RULES = Regex("^rules:\\s*\\[\\s*]\\s*$")
-    private val LIST_ITEM_INDENT = Regex("^(\\s+)-.*$")
+    private val LIST_ITEM_INDENT = Regex("^(\\s*)-.*$")
 
-    /** 从最终 MATCH/FINAL 规则取"兜底代理组"名，例如 `MATCH,CoffeeCloud` → CoffeeCloud。 */
+    /**
+     * 从最终 MATCH/FINAL 规则取"兜底代理组"名，例如 `MATCH,CoffeeCloud` → CoffeeCloud。
+     * 组名可能带空格(如 `🐟 漏网之鱼`)，故捕获到行尾为止，而非遇到空白就截断。
+     */
     private val FINAL_TARGET =
-        Regex("(?:MATCH|FINAL)\\s*,\\s*['\"]?([^,'\"\\s]+)", RegexOption.IGNORE_CASE)
+        Regex("(?:MATCH|FINAL)\\s*,\\s*(.+)", RegexOption.IGNORE_CASE)
+
+    /** 去掉捕获到的目标名两端的引号与空白，例如 `'🐟 漏网之鱼'` → `🐟 漏网之鱼`。 */
+    private fun cleanTarget(raw: String): String {
+        var s = raw.trim()
+        if (s.length >= 2 &&
+            ((s.first() == '\'' && s.last() == '\'') || (s.first() == '"' && s.last() == '"'))
+        ) {
+            s = s.substring(1, s.length - 1)
+        }
+        return s
+    }
 
     /** 匹配本类注入过的规则行，用于幂等：先删后插。 */
     private val INJECTED = Regex(
@@ -51,7 +65,7 @@ object TikTokRuleManager {
      * 若找不到可用的兜底代理组(如最终是 MATCH,DIRECT)，则不注入(没有代理目标可用)。
      */
     fun patchRules(configText: String): String {
-        val target = FINAL_TARGET.find(configText)?.groupValues?.get(1)
+        val target = FINAL_TARGET.find(configText)?.groupValues?.get(1)?.let(::cleanTarget)
         if (target == null || target.equals("DIRECT", true) || target.equals("REJECT", true)) {
             return configText
         }
@@ -86,14 +100,20 @@ object TikTokRuleManager {
         return lines.joinToString("\n")
     }
 
-    /** 取 rules 下第一个列表项的缩进；取不到默认 2 空格。 */
+    /**
+     * 取 rules 块里出现次数最多的列表项缩进（多数表决），取不到默认 2 空格。
+     * 用多数表决而非"看第一行"，是因为第一行可能恰好是本类/[QuicRuleManager] 上次注入、
+     * 缩进本身就有问题的行；订阅原始规则数量远多于注入规则，多数表决能自我纠正、不被污染。
+     */
     private fun detectIndent(lines: List<String>, rulesIdx: Int): String {
+        val counts = HashMap<String, Int>()
         for (i in (rulesIdx + 1) until lines.size) {
             val line = lines[i]
             if (line.isBlank()) continue
-            val m = LIST_ITEM_INDENT.matchEntire(line)
-            return m?.groupValues?.get(1) ?: "  "
+            val m = LIST_ITEM_INDENT.matchEntire(line) ?: break
+            val indent = m.groupValues[1]
+            counts[indent] = (counts[indent] ?: 0) + 1
         }
-        return "  "
+        return counts.maxByOrNull { it.value }?.key ?: "  "
     }
 }

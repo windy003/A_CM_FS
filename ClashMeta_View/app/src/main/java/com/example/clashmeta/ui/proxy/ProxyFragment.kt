@@ -291,9 +291,13 @@ class ProxyFragment : Fragment() {
     private suspend fun fetchProxies() {
         val ctx = context ?: return
         try {
-            val isVpnRunning = ClashVpnService.isVpnRunning(ctx)
+            // 注意：不能用持久化的 isVpnRunning(ctx)（SharedPreferences）来判断内核是否已加载配置——
+            // 该标志跨进程重启不会自动清零（例如上次进程被系统杀掉/崩溃时 VPN 恰好在跑），
+            // 导致重启 App 后仍读到"运行中"，从而跳过下面的加载步骤，使代理列表一直为空。
+            // VpnService 与 UI 同进程，原生层 Mobile.isRunning() 是本进程内的实时状态，不存在这个问题。
+            val nativeRunning = withContext(Dispatchers.IO) { Mobile.isRunning() }
             // 未开启 VPN 时也能预览节点：仅把配置加载进内核（不建立隧道）
-            val coreReady = if (isVpnRunning) true
+            val coreReady = if (nativeRunning) true
                 else withContext(Dispatchers.IO) { ClashVpnService.ensureCoreLoadedForPreview(ctx) }
             if (coreReady) {
                 val json = withContext(Dispatchers.IO) { Mobile.getProxies() }
