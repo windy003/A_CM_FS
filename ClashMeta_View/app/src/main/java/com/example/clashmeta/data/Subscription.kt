@@ -20,7 +20,7 @@ object SubscriptionManager {
     private val gson = Gson()
 
     fun getSubscriptionsFile(context: Context): File {
-        return File(ClashMetaApp.CLASH_DIR_PATH, SUBSCRIPTIONS_FILE)
+        return File(ClashMetaApp.instance.getClashDir(), SUBSCRIPTIONS_FILE)
     }
 
     fun loadSubscriptions(context: Context): MutableList<Subscription> {

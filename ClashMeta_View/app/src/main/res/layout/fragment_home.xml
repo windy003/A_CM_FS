@@ -52,6 +52,18 @@
             android:textColor="?attr/colorPrimary"
             android:visibility="gone" />
 
+        <!-- 启动失败原因（仅失败时显示） -->
+        <TextView
+            android:id="@+id/text_error"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:maxWidth="300dp"
+            android:gravity="center"
+            android:textSize="12sp"
+            android:textColor="?attr/colorError"
+            android:visibility="gone" />
+
         <Space
             android:layout_width="match_parent"
             android:layout_height="16dp" />

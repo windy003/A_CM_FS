@@ -37,7 +37,7 @@ class SettingsFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        binding.textDataPath.text = ClashMetaApp.CLASH_DIR_PATH
+        binding.textDataPath.text = ClashMetaApp.instance.getClashDir().absolutePath
 
         binding.cardApps.setOnClickListener {
             startActivity(Intent(requireContext(), AppsActivity::class.java))

@@ -34,6 +34,7 @@ class ClashVpnService : VpnService() {
 
         private const val PREFS_NAME = "vpn_state"
         private const val KEY_IS_RUNNING = "is_running"
+        private const val KEY_LAST_ERROR = "last_error"
 
         // TUN MTU：VPN 接口(setMtu) 与 sing-tun 协议栈(startTun) 必须一致。
         // 用 9000（与官方 CMFA 一致）：配合 gvisor 栈可减少分包、提升 TCP 吞吐。
@@ -54,6 +55,20 @@ class ClashVpnService : VpnService() {
         fun isVpnRunning(context: android.content.Context): Boolean {
             return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getBoolean(KEY_IS_RUNNING, false)
+        }
+
+        /**
+         * 上一次启动失败的原因。启动流程里任何一步失败都会静默 stopSelf，
+         * 用户只看到「开关自己弹回去」；把原因存下来给界面显示，方便排查机型差异。
+         */
+        fun getLastError(context: android.content.Context): String? {
+            return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getString(KEY_LAST_ERROR, null)
+        }
+
+        fun clearLastError(context: android.content.Context) {
+            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit().remove(KEY_LAST_ERROR).apply()
         }
 
         /**
@@ -102,6 +117,14 @@ class ClashVpnService : VpnService() {
     // 因此启动成功后 Java 侧不能再 close，否则会 double-close 导致 fdsan abort。
     @Volatile
     private var tunStarted = false
+
+    private fun recordError(reason: String) {
+        Log.e(TAG, "VPN start failed: $reason")
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putString(KEY_LAST_ERROR, reason)
+            .apply()
+    }
 
     private fun setRunningState(running: Boolean) {
         isRunning = running
@@ -153,6 +176,7 @@ class ClashVpnService : VpnService() {
 
         isStarting = true
         isStopping = false
+        clearLastError(this)
         Log.d(TAG, "Starting VPN...")
 
         // 启动前台通知
@@ -164,7 +188,9 @@ class ClashVpnService : VpnService() {
                 Log.d(TAG, "Establishing VPN interface...")
                 vpnInterface = establishVpn()
                 if (vpnInterface == null) {
-                    Log.e(TAG, "Failed to establish VPN interface")
+                    // establish() 返回 null：多为 VPN 授权被撤销，或系统里已有
+                    // 另一个 VPN / 始终开启的 VPN 占用了接口
+                    recordError("建立 VPN 接口失败：授权可能已被撤销，或已有其他 VPN 在运行")
                     isStarting = false
                     stopSelf()
                     return@launch
@@ -180,6 +206,7 @@ class ClashVpnService : VpnService() {
                     Log.d(TAG, "Clash initialized successfully")
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to initialize Clash", e)
+                    recordError("Clash 初始化失败(${clashDir.absolutePath}): ${e.javaClass.simpleName}: ${e.message}")
                 }
 
                 // 启动 Clash 核心
@@ -215,7 +242,7 @@ class ClashVpnService : VpnService() {
                         tunStarted = true  // gomobile 已接管 fd，停止时由 stopTun 关闭
                         Log.d(TAG, "TUN started successfully!")
                     } else {
-                        Log.e(TAG, "Invalid VPN file descriptor: $fd")
+                        recordError("VPN 文件描述符无效: $fd")
                     }
 
                     setRunningState(true)
@@ -230,7 +257,17 @@ class ClashVpnService : VpnService() {
                 } else {
                     Log.d(TAG, "Config not found, using default config...")
                     val defaultConfig = createDefaultConfig()
-                    configFile.writeText(defaultConfig)
+                    try {
+                        configFile.parentFile?.mkdirs()
+                        configFile.writeText(defaultConfig)
+                    } catch (e: Exception) {
+                        // 写不进数据目录（常见于拿不到「所有文件访问权限」）：
+                        // 直接失败并把原因写出来，而不是抛异常静默关掉开关
+                        recordError("无法写入配置文件 ${configFile.absolutePath}: ${e.javaClass.simpleName}: ${e.message}")
+                        isStarting = false
+                        stopVpn()
+                        return@launch
+                    }
                     // 按局域网代理开关注入 allow-lan / bind-address
                     com.example.clashmeta.data.LanProxyManager.applyToConfigFile()
                     if (Mobile.isRunning()) {
@@ -252,6 +289,7 @@ class ClashVpnService : VpnService() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error starting VPN", e)
+                recordError("${e.javaClass.simpleName}: ${e.message}")
                 isStarting = false
                 stopVpn()
             }
@@ -324,14 +362,26 @@ class ClashVpnService : VpnService() {
 
         // 设置系统 HTTP 代理，供 Opera 等读取系统代理的浏览器使用
         // 端口与 config.yaml 注入的 mixed-port 保持一致（用户可自定义）
+        // 注意：排除列表里的通配符写法在部分系统版本上会被校验拒绝，
+        // 抛异常会让整个 establish() 失败、开关直接弹回；系统代理只是锦上添花，
+        // 失败时降级为不设系统代理，保证 VPN 本身能起来。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val proxyPort = com.example.clashmeta.data.LanProxyManager.getPort(this)
-            builder.setHttpProxy(
-                ProxyInfo.buildDirectProxy(
-                    "127.0.0.1", proxyPort,
-                    listOf("localhost", "127.*", "10.*", "172.*", "192.168.*")
+            try {
+                builder.setHttpProxy(
+                    ProxyInfo.buildDirectProxy(
+                        "127.0.0.1", proxyPort,
+                        listOf("localhost", "127.*", "10.*", "172.*", "192.168.*")
+                    )
                 )
-            )
+            } catch (e: Exception) {
+                Log.w(TAG, "setHttpProxy failed, continue without system proxy", e)
+                try {
+                    builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", proxyPort))
+                } catch (e2: Exception) {
+                    Log.w(TAG, "setHttpProxy fallback also failed", e2)
+                }
+            }
         }
 
         return builder.establish()
@@ -500,14 +550,21 @@ class ClashVpnService : VpnService() {
 
     private fun startForegroundNotification() {
         val notification = buildNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                ClashMetaApp.NOTIFICATION_ID,
-                notification,
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
-        } else {
-            startForeground(ClashMetaApp.NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    ClashMetaApp.NOTIFICATION_ID,
+                    notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(ClashMetaApp.NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            // Android 12+ 后台启动前台服务受限、14+ 还会校验 FGS 类型；
+            // 直接抛出去会让 onStartCommand 崩溃，只留一个「开关自己弹回去」的现象。
+            recordError("启动前台服务失败: ${e.javaClass.simpleName}: ${e.message}")
+            throw e
         }
     }
 

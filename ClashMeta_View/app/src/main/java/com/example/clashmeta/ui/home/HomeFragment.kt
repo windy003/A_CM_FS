@@ -38,6 +38,19 @@ class HomeFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
 
         binding.textDevice.text = buildDeviceInfo()
+        // 长按错误信息复制，方便反馈
+        binding.textError.setOnLongClickListener {
+            val text = binding.textError.text?.toString().orEmpty()
+            if (text.isNotEmpty()) {
+                val cm = requireContext()
+                    .getSystemService(android.content.ClipboardManager::class.java)
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("error", text))
+                android.widget.Toast
+                    .makeText(requireContext(), "已复制错误信息", android.widget.Toast.LENGTH_SHORT)
+                    .show()
+            }
+            true
+        }
         binding.textTile.text = buildTileConfigInfo()
 
         binding.btnConnect.setOnClickListener {
@@ -96,6 +109,15 @@ class HomeFragment : Fragment() {
         } else {
             binding.textProxy.visibility = View.GONE
         }
+
+        // 启动失败原因：开关自己弹回去时把真实原因显示出来
+        val lastError = ClashVpnService.getLastError(ctx)
+        if (!isConnected && !lastError.isNullOrEmpty()) {
+            binding.textError.visibility = View.VISIBLE
+            binding.textError.text = "启动失败: $lastError"
+        } else {
+            binding.textError.visibility = View.GONE
+        }
     }
 
     private fun buildDeviceInfo(): String {
@@ -107,6 +129,8 @@ class HomeFragment : Fragment() {
         return buildString {
             append("当前设备: $manufacturer $model")
             if (isLGWing) append(" (LG Wing)")
+            append("\nAndroid ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+            append("\n数据目录: ${com.example.clashmeta.ClashMetaApp.instance.getClashDir().absolutePath}")
         }
     }
 

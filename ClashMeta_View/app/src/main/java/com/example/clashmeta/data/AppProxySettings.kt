@@ -33,7 +33,7 @@ object AppProxyManager {
     private val gson = Gson()
 
     private fun getConfigFile(): File {
-        return File(com.example.clashmeta.ClashMetaApp.CLASH_DIR_PATH, CONFIG_FILE)
+        return File(com.example.clashmeta.ClashMetaApp.instance.getClashDir(), CONFIG_FILE)
     }
 
     fun loadConfig(): AppProxyConfig {
