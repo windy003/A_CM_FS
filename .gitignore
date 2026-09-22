@@ -5,3 +5,4 @@ ClashMeta_View/build
 ClashMeta_View/.gradle
 ClashMeta_View/.idea
 ClashMeta_View/app/build
+*.zip
