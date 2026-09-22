@@ -12,7 +12,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "2026/9/5-1"
+        versionName = "2026/9/22-1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -41,6 +41,14 @@ android {
 
     buildFeatures {
         viewBinding = true
+    }
+
+    testOptions {
+        unitTests {
+            // ChainRouteManager 的注入逻辑是纯文本改写，但里面有 android.util.Log 调用。
+            // 不开这个，JVM 单测一碰到 Log 就抛 "Method not mocked"。
+            isReturnDefaultValues = true
+        }
     }
 
     packaging {

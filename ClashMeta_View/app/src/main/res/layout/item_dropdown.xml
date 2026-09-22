@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  下拉菜单的单项样式。
+
+  不直接用 android.R.layout.simple_list_item_1：那是 platform 资源，配色跟随系统而非
+  Material3 主题，在深色模式下会出现「深底深字」。这里显式绑定主题色，确保两种模式都可读。
+-->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:ellipsize="end"
+    android:gravity="center_vertical"
+    android:minHeight="48dp"
+    android:paddingStart="16dp"
+    android:paddingEnd="16dp"
+    android:singleLine="true"
+    android:textColor="?android:attr/textColorPrimary"
+    android:textSize="16sp" />

@@ -65,6 +65,9 @@ object LanProxyManager {
             patched = QuicRuleManager.patchRules(patched)
             // TikTok 域名规则(负责有域名的 TCP，如搜索接口)，插到 QUIC 规则之上。
             patched = TikTokRuleManager.patchRules(patched)
+            // 用户指定的域名走自己的 VPS(可再经机场节点中转)。必须排在 QUIC 规则之上，
+            // 否则这些域名的 UDP 443 会被那条「境外 QUIC → 兜底组」先抓走，只剩 TCP 走 VPS。
+            patched = ChainRouteManager.patchRules(patched, ctx)
             // 把 server 为 8.8.8.8 的假节点从自动选择/故障转移组里剔除，避免自动选中死节点
             patched = AutoGroupSanitizer.patch(patched)
             file.writeText(patched)

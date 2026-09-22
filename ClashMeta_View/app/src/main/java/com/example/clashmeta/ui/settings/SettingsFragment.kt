@@ -5,12 +5,15 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.example.clashmeta.ClashMetaApp
+import com.example.clashmeta.R
 import com.example.clashmeta.core.ClashVpnService
 import com.example.clashmeta.data.AppProxyManager
+import com.example.clashmeta.data.ChainRouteManager
 import com.example.clashmeta.data.LanProxyManager
 import com.example.clashmeta.data.ProxyMode
 import com.example.clashmeta.databinding.FragmentSettingsBinding
@@ -51,6 +54,142 @@ class SettingsFragment : Fragment() {
             onLanToggled(isChecked)
         }
         binding.btnApplyPort.setOnClickListener { applyPort() }
+
+        setupChainRoute()
+    }
+
+    // ------------------------------------------------ 指定域名走自己的 VPS（链式）
+
+    /** 前置跳下拉里「不套机场、手机直连 VPS」那一项的显示文案，对应存储值是空串。 */
+    private val chainNoDialer = "不使用（手机直连 VPS）"
+
+    private fun setupChainRoute() {
+        val ctx = requireContext()
+
+        binding.editChainDomains.setText(ChainRouteManager.getDomainsRaw(ctx))
+        binding.switchChain.isChecked = ChainRouteManager.isEnabled(ctx)
+        binding.layoutChainDetail.visibility =
+            if (binding.switchChain.isChecked) View.VISIBLE else View.GONE
+        updateChainStatus()
+        loadChainOptions()
+
+        binding.switchChain.setOnCheckedChangeListener { _, isChecked ->
+            ChainRouteManager.setEnabled(ctx, isChecked)
+            binding.layoutChainDetail.visibility = if (isChecked) View.VISIBLE else View.GONE
+            if (isChecked) loadChainOptions()
+            updateChainStatus()
+            applyChainRoute(if (isChecked) "已开启" else "已关闭")
+        }
+        binding.btnChainSave.setOnClickListener { saveChainRoute() }
+    }
+
+    /**
+     * 从 config.yaml 读出节点名和代理组名填进两个下拉。
+     * 每次展开都重新读——订阅更新后节点和组名都可能变，缓存住会让用户选到已经不存在的名字。
+     */
+    private fun loadChainOptions() {
+        val ctx = context ?: return
+        viewLifecycleOwner.lifecycleScope.launch {
+            val (proxies, groups) = withContext(Dispatchers.IO) {
+                val file = ClashMetaApp.instance.getConfigFile()
+                if (!file.exists()) return@withContext emptyList<String>() to emptyList<String>()
+                val text = file.readText()
+                ChainRouteManager.listProxyNames(text) to ChainRouteManager.listGroupNames(text)
+            }
+            if (_binding == null) return@launch
+
+            binding.dropdownChainExit.setAdapter(
+                ArrayAdapter(ctx, R.layout.item_dropdown, proxies)
+            )
+            binding.dropdownChainDialer.setAdapter(
+                ArrayAdapter(ctx, R.layout.item_dropdown, listOf(chainNoDialer) + groups)
+            )
+
+            // 回显已保存的选择。setText 第二参数必须传 false，否则 AutoCompleteTextView
+            // 会把它当成输入并立刻弹出下拉过滤列表。
+            val savedExit = ChainRouteManager.getExit(ctx)
+            binding.dropdownChainExit.setText(savedExit, false)
+            val savedDialer = ChainRouteManager.getDialer(ctx)
+            binding.dropdownChainDialer.setText(
+                if (savedDialer.isEmpty()) chainNoDialer else savedDialer, false
+            )
+
+            binding.layoutChainExit.error =
+                if (proxies.isEmpty()) "还没有节点，请先导入订阅或粘贴 VPS 节点" else null
+            // 存着的名字在订阅更新后可能已经不存在了，直接提示而不是等注入时静默跳过
+            if (savedExit.isNotEmpty() && !proxies.contains(savedExit)) {
+                binding.layoutChainExit.error = "节点「$savedExit」已不存在，请重新选择"
+            }
+            if (savedDialer.isNotEmpty() && !groups.contains(savedDialer)) {
+                binding.layoutChainDialer.error = "组「$savedDialer」已不存在，请重新选择"
+            } else {
+                binding.layoutChainDialer.error = null
+            }
+        }
+    }
+
+    private fun saveChainRoute() {
+        val ctx = context ?: return
+        val exit = binding.dropdownChainExit.text?.toString()?.trim().orEmpty()
+        val dialerRaw = binding.dropdownChainDialer.text?.toString()?.trim().orEmpty()
+        val dialer = if (dialerRaw == chainNoDialer) "" else dialerRaw
+        val domainsRaw = binding.editChainDomains.text?.toString().orEmpty()
+
+        if (exit.isEmpty()) {
+            binding.layoutChainExit.error = "请选择出口节点"
+            return
+        }
+        if (domainsRaw.isBlank()) {
+            binding.layoutChainDomains.error = "请至少填一个域名"
+            return
+        }
+        binding.layoutChainExit.error = null
+        binding.layoutChainDomains.error = null
+
+        ChainRouteManager.save(ctx, exit, dialer, domainsRaw)
+        updateChainStatus()
+        applyChainRoute("已保存")
+    }
+
+    /** 写回 config.yaml 并在 VPN 运行时热重载，与局域网开关那边同一套流程。 */
+    private fun applyChainRoute(prefix: String) {
+        val ctx = context ?: return
+        viewLifecycleOwner.lifecycleScope.launch {
+            withContext(Dispatchers.IO) {
+                LanProxyManager.applyToConfigFile()
+                if (ClashVpnService.isVpnRunning(ctx)) {
+                    try {
+                        Mobile.reloadConfig()
+                    } catch (e: Exception) {
+                        // VPN 可能没运行
+                    }
+                }
+            }
+            if (_binding == null) return@launch
+            val tip = if (ClashVpnService.isVpnRunning(ctx)) {
+                "$prefix，若未生效请重启 VPN"
+            } else {
+                "$prefix，启动 VPN 后生效"
+            }
+            Toast.makeText(ctx, tip, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun updateChainStatus() {
+        if (_binding == null) return
+        val ctx = requireContext()
+        if (!ChainRouteManager.isEnabled(ctx)) {
+            binding.textChainStatus.text = "关闭。开启后可让指定域名从自己的 VPS 出去"
+            return
+        }
+        val exit = ChainRouteManager.getExit(ctx)
+        val dialer = ChainRouteManager.getDialer(ctx)
+        val count = ChainRouteManager.getDomains(ctx).size
+        binding.textChainStatus.text = when {
+            exit.isEmpty() || count == 0 -> "已开启，但还没配置完（需选出口节点并填域名）"
+            dialer.isEmpty() -> "$count 个域名 → $exit（直连，单跳）"
+            else -> "$count 个域名 → $dialer → $exit"
+        }
     }
 
     private fun applyPort() {
@@ -87,6 +226,9 @@ class SettingsFragment : Fragment() {
         super.onResume()
         loadAppProxyInfo()
         updateLanStatus()
+        updateChainStatus()
+        // 用户可能刚去节点页导入了 VPS 节点或刷新了订阅，回来要能选到新名字
+        if (binding.switchChain.isChecked) loadChainOptions()
     }
 
     private fun onLanToggled(enabled: Boolean) {
