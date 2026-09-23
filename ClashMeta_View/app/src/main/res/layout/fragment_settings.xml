@@ -264,7 +264,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="指定域名走自己的 VPS"
+                            android:text="全部流量走自己的 VPS"
                             android:textSize="16sp" />
 
                         <TextView
@@ -328,28 +328,11 @@
                         android:textColor="?android:attr/textColorSecondary"
                         android:textSize="12sp" />
 
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/layout_chain_domains"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
-                        android:hint="域名（一行一个）">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/edit_chain_domains"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:gravity="top"
-                            android:inputType="textMultiLine|textNoSuggestions"
-                            android:minLines="3" />
-                    </com.google.android.material.textfield.TextInputLayout>
-
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:text="写 missav.ws 是后缀匹配（含所有子域名）；写 keyword:surrit 是关键词匹配，适合一堆换着来的 CDN 域名。只填主域名通常没用——视频在独立的 CDN 域名上，开着 VPN 播一段，去连接列表里找流量最大的那条。"
+                        android:layout_marginTop="8dp"
+                        android:text="开启后不再按网站区分：所有流量（局域网地址除外）都从 VPS 出去，订阅自带的分流规则一律不生效。关掉即完全恢复订阅原样。"
                         android:textColor="?android:attr/textColorSecondary"
                         android:textSize="12sp" />
 

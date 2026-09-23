@@ -5,7 +5,7 @@ import android.util.Log
 import org.yaml.snakeyaml.Yaml
 
 /**
- * 指定域名走「自己的 VPS」，并让 VPS 这一跳经由机场节点拨出（链式代理）。
+ * 一个总开关：开了就让**全部流量**走「自己的 VPS」，并让 VPS 这一跳经由机场节点拨出（链式代理）。
  *
  * 目标链路：
  *     手机 ──► 机场节点(前置跳) ──► 自己的 VPS(出口) ──► 目标站点
@@ -14,15 +14,23 @@ import org.yaml.snakeyaml.Yaml
  * 第二跳用自己的 VPS，是为了拿机场给不了的带宽和线路。若手机本来就能直连 VPS，
  * 把「前置跳」留空即可退化成单跳（更快，没有中间损耗）。
  *
- * 靠内核的 `dialer-proxy` 实现：给出口节点加一行，它自己的出站连接就会先从指定代理拨出。
+ * 早先的版本要求用户逐条填域名才分流到 VPS。实际用下来这件事根本做不对——视频站的正片在
+ * 一堆随时更换的 CDN 域名上，用户填的主域名压根命中不了，表现就是「开了没用」。现在改成
+ * 总开关：开 = 全走 VPS，关 = 完全不动订阅的分流，不再需要识别网站 URL。
+ *
+ * 靠内核的 `dialer-proxy` 实现前置跳：给出口节点加一行，它自己的出站连接就会先从指定代理拨出。
  * 见 clash-core/component/proxydialer/proxydialer.go —— 那里用 `tunnel.Proxies()` 查名字，
  * 而这张表**把代理组也当成 proxy 收录**，所以 dialer-proxy 可以直接填组名。
  * 填组名比填具体节点名强得多：节点被封时组会自己测速切换，前置跳跟着自动换，链路自愈。
  *
  * ## 注入顺序
  * 必须在 [QuicRuleManager.patchRules] 和 [TikTokRuleManager.patchRules] **之后**调用。
- * 本类把规则插到 rules 最顶端，排在那条「境外 UDP 443 → 兜底组」之上，否则目标站点的
- * QUIC(HTTP/3) 流量会被它先抓走送去机场兜底组，只有 TCP 走 VPS——速度上不去还极难排查。
+ * 本类把规则插到 rules 最顶端，总开关的 MATCH 要压在那两位注入的规则之上，否则境外 UDP 443
+ * 会被「境外 QUIC → 兜底组」先抓走送去机场，只有 TCP 走 VPS——速度上不去还极难排查。
+ *
+ * ## 为什么 MATCH 之前还垫了几条 IP-CIDR
+ * MATCH 会连局域网和本机地址一起收走，路由器后台、投屏、局域网共享就都废了。所以在它之上
+ * 放四条私有网段直连，带 no-resolve 保证不触发 DNS 解析。
  *
  * ## 为什么用文本改写而不是 YAML 重排
  * 与 [AutoGroupSanitizer] 同理：整份 load/dump 会把 flow 风格的节点行重排成 block 风格，
@@ -34,8 +42,9 @@ import org.yaml.snakeyaml.Yaml
  *   - dialer-proxy：从**所有**节点上剥掉（本 app 别处不用这个字段，全局剥离最省心，
  *     且天然覆盖「换了出口节点」「关掉了功能」这些情况，不会留下孤儿）。
  *   - 规则行：删掉上次注入时逐字记下的那几行（存在 SharedPreferences），
- *     外加删掉所有指向当前出口节点的域名规则。两者取并集，改域名/改节点/清空都能干净回滚。
- *     不用文件内的注释做标记，是因为 [ProxyClipboard] 写回时走 YAML dump 会丢掉全部注释。
+ *     外加删掉所有指向当前出口节点的规则——含旧版按域名注入的 DOMAIN-* 行，这样从老版本
+ *     升上来也能一次清干净。不用文件内的注释做标记，是因为 [ProxyClipboard] 写回时走
+ *     YAML dump 会丢掉全部注释。
  */
 object ChainRouteManager {
 
@@ -44,11 +53,15 @@ object ChainRouteManager {
     private const val KEY_ENABLED = "enabled"
     private const val KEY_EXIT = "exit_proxy"
     private const val KEY_DIALER = "dialer_proxy"
-    private const val KEY_DOMAINS = "domains"
     private const val KEY_LAST_RULES = "last_rules"
 
-    /** 域名输入里用这个前缀表示关键词匹配，例如 `keyword:surrit`。 */
-    private const val KEYWORD_PREFIX = "keyword:"
+    /** 私有网段直连，垫在 MATCH 之前，免得局域网也被卷进代理。 */
+    private val LAN_DIRECT_RULES = listOf(
+        "IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
+        "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
+        "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve",
+        "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
+    )
 
     // ---------------------------------------------------------------- 设置读写
 
@@ -64,25 +77,12 @@ object ChainRouteManager {
     /** 前置跳：机场的代理组名；空表示不套机场、手机直连 VPS。 */
     fun getDialer(ctx: Context): String = prefs(ctx).getString(KEY_DIALER, "") ?: ""
 
-    /** 用户填的域名，一行一个，已去空行去重。 */
-    fun getDomains(ctx: Context): List<String> = parseDomains(prefs(ctx).getString(KEY_DOMAINS, ""))
-
-    /** 域名原文（供输入框回显，保留用户的换行排版）。 */
-    fun getDomainsRaw(ctx: Context): String = prefs(ctx).getString(KEY_DOMAINS, "") ?: ""
-
-    fun save(ctx: Context, exit: String, dialer: String, domainsRaw: String) {
+    fun save(ctx: Context, exit: String, dialer: String) {
         prefs(ctx).edit()
             .putString(KEY_EXIT, exit)
             .putString(KEY_DIALER, dialer)
-            .putString(KEY_DOMAINS, domainsRaw)
             .apply()
     }
-
-    private fun parseDomains(raw: String?): List<String> =
-        (raw ?: "").split("\n", ",")
-            .map { it.trim() }
-            .filter { it.isNotEmpty() && !it.startsWith("#") }
-            .distinct()
 
     // ---------------------------------------------------------- 供 UI 的下拉数据
 
@@ -152,7 +152,6 @@ object ChainRouteManager {
                 configText = configText,
                 exit = getExit(ctx).trim(),
                 dialer = getDialer(ctx).trim(),
-                domains = getDomains(ctx),
                 enabled = isEnabled(ctx),
                 lastRules = lastRules
             )
@@ -174,24 +173,23 @@ object ChainRouteManager {
      * 纯函数版注入：不碰 Context，所有输入显式传进来，便于单测覆盖
      * flow/block 两种节点写法、幂等回滚、名字对不上时的降级。
      *
-     * 关闭功能或没选出口节点时，只做回滚（剥 dialer-proxy + 删旧规则）后返回，
+     * 关掉总开关或没选出口节点时，只做回滚（剥 dialer-proxy + 删旧规则）后返回，
      * 保证「关掉开关」能立刻恢复成没动过的样子。
      */
     fun patch(
         configText: String,
         exit: String,
         dialer: String,
-        domains: List<String>,
         enabled: Boolean,
         lastRules: Set<String>
     ): Patched {
         // 1) 回滚上一次注入
         var lines = rollback(configText, lastRules, exit).toMutableList()
 
-        val active = enabled && exit.isNotEmpty() && domains.isNotEmpty()
+        val active = enabled && exit.isNotEmpty()
         if (!active) return Patched(lines.joinToString("\n"), emptyList())
 
-        // 2) 出口节点必须真实存在，否则内核会因为 dialer-proxy 指向不存在的名字而起不来
+        // 2) 出口节点必须真实存在，否则内核会因为 MATCH / dialer-proxy 指向不存在的名字而起不来
         val text = lines.joinToString("\n")
         if (!listProxyNames(text).contains(exit)) {
             Log.w(TAG, "exit proxy '$exit' not found in config, skip injection")
@@ -209,18 +207,19 @@ object ChainRouteManager {
             }
         }
 
-        // 4) 域名规则插到 rules 顶端
-        val newRules = buildRules(lines, domains, exit)
+        // 4) 总开关规则插到 rules 顶端，一条 MATCH 压住订阅自己的全部分流
+        val newRules = buildRules(lines, exit)
         lines = insertRules(lines, newRules).toMutableList()
         return Patched(lines.joinToString("\n"), newRules)
     }
 
-    /** 剥掉所有 dialer-proxy，并删除上次注入的规则行 + 所有指向 exit 的域名规则。 */
+    /** 剥掉所有 dialer-proxy，并删除上次注入的规则行 + 所有指向 exit 的规则。 */
     private fun rollback(configText: String, lastRules: Set<String>, exit: String): List<String> {
-        // 指向当前出口节点的域名规则：出口是用户自己的 VPS，订阅规则不可能引用它，
-        // 所以按目标名匹配是安全且精确的。
+        // 指向当前出口节点的规则：出口是用户自己的 VPS，订阅规则不可能引用它，所以按目标名
+        // 匹配是安全且精确的。DOMAIN-* 那几种是旧版「按域名分流」留下的，一并收掉。
         val byTarget = if (exit.isEmpty()) null else Regex(
-            "^\\s*-\\s*DOMAIN(?:-SUFFIX|-KEYWORD)?,[^,]+,\\s*" + Regex.escape(exit) + "\\s*$",
+            "^\\s*-\\s*(?:MATCH|FINAL|DOMAIN(?:-SUFFIX|-KEYWORD)?,[^,]+),\\s*" +
+                Regex.escape(exit) + "\\s*$",
             RegexOption.IGNORE_CASE
         )
 
@@ -300,18 +299,14 @@ object ChainRouteManager {
         return raw.trim().ifEmpty { null }
     }
 
-    /** 把用户填的域名转成规则行。`keyword:` 前缀走关键词匹配，其余按后缀匹配。 */
-    private fun buildRules(lines: List<String>, domains: List<String>, exit: String): List<String> {
+    /**
+     * 总开关的规则：私有网段直连 + 一条全量 MATCH 打到出口节点。
+     * 放在 rules 最顶端是故意的——一条就顶掉订阅里所有分流，这正是「总开关」的语义。
+     */
+    private fun buildRules(lines: List<String>, exit: String): List<String> {
         val blockIdx = lines.indexOfFirst { TOP_LEVEL_RULES.matches(it) }
         val indent = if (blockIdx >= 0) detectIndent(lines, blockIdx) else "  "
-        return domains.map { d ->
-            if (d.startsWith(KEYWORD_PREFIX, ignoreCase = true)) {
-                val kw = d.substring(KEYWORD_PREFIX.length).trim()
-                "$indent- DOMAIN-KEYWORD,$kw,$exit"
-            } else {
-                "$indent- DOMAIN-SUFFIX,$d,$exit"
-            }
-        }
+        return LAN_DIRECT_RULES.map { "$indent- $it" } + "$indent- MATCH,$exit"
     }
 
     /** 插到 rules 顶端；块状 / 内联空 / 整个缺失 三种情况都兜住。与 TikTokRuleManager 同款。 */

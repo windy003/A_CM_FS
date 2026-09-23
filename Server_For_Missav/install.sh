@@ -158,9 +158,13 @@ else
 fi
 
 # ---------- 输出节点 ----------
+# 三个源都失败也不能中断：服务此时已经装好跑起来了，憋着不打印节点等于白装。
+# 注意不能写成 `IP="$(curl ...)" && [ -n "$IP" ] && break`——整条 && 列表失败会被
+# set -e 抓住直接退出，恰恰在最需要兜底的那条路上炸掉。
 IP=""
 for u in "https://api.ipify.org" "https://ifconfig.me/ip" "https://ipinfo.io/ip"; do
-  IP="$(curl -fsS --max-time 8 "$u" 2>/dev/null | tr -d '[:space:]')" && [ -n "$IP" ] && break
+  IP="$(curl -fsS --max-time 8 "$u" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [ -n "$IP" ]; then break; fi
 done
 [ -n "$IP" ] || { IP="<你的VPS_IP>"; warn "自动获取公网 IP 失败，请手动替换"; }
 
@@ -183,10 +187,12 @@ udp: true
  ss://$METHOD:$PASS@$IP:$PORT#MyVPS
 ------------------------------------------------------------------------
 
- 导入后在 app「设置 → 指定域名走自己的 VPS」里：
+ 导入后在 app「设置 → 全部流量走自己的 VPS」里：
    出口节点   选 MyVPS
    前置跳     选机场的自动选择组（这样机场节点被封时会自动换，链路自愈）
-   域名       一行一个，先填 missav.ws，视频 CDN 域名见 README
+ 然后打开开关，全部流量（局域网地址除外）就都从这台 VPS 出去了。
+
+ 这段配置忘了随时能重新打印：sudo bash show.sh
 
  如果视频卡（QUIC 被机场那一跳吃掉），给节点加一行 udp-over-tcp: true，
  详见 README 的「UDP / QUIC 怎么办」。

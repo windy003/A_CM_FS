@@ -58,7 +58,7 @@ class SettingsFragment : Fragment() {
         setupChainRoute()
     }
 
-    // ------------------------------------------------ 指定域名走自己的 VPS（链式）
+    // ------------------------------------------------ 全部流量走自己的 VPS（链式）
 
     /** 前置跳下拉里「不套机场、手机直连 VPS」那一项的显示文案，对应存储值是空串。 */
     private val chainNoDialer = "不使用（手机直连 VPS）"
@@ -66,7 +66,6 @@ class SettingsFragment : Fragment() {
     private fun setupChainRoute() {
         val ctx = requireContext()
 
-        binding.editChainDomains.setText(ChainRouteManager.getDomainsRaw(ctx))
         binding.switchChain.isChecked = ChainRouteManager.isEnabled(ctx)
         binding.layoutChainDetail.visibility =
             if (binding.switchChain.isChecked) View.VISIBLE else View.GONE
@@ -133,20 +132,14 @@ class SettingsFragment : Fragment() {
         val exit = binding.dropdownChainExit.text?.toString()?.trim().orEmpty()
         val dialerRaw = binding.dropdownChainDialer.text?.toString()?.trim().orEmpty()
         val dialer = if (dialerRaw == chainNoDialer) "" else dialerRaw
-        val domainsRaw = binding.editChainDomains.text?.toString().orEmpty()
 
         if (exit.isEmpty()) {
             binding.layoutChainExit.error = "请选择出口节点"
             return
         }
-        if (domainsRaw.isBlank()) {
-            binding.layoutChainDomains.error = "请至少填一个域名"
-            return
-        }
         binding.layoutChainExit.error = null
-        binding.layoutChainDomains.error = null
 
-        ChainRouteManager.save(ctx, exit, dialer, domainsRaw)
+        ChainRouteManager.save(ctx, exit, dialer)
         updateChainStatus()
         applyChainRoute("已保存")
     }
@@ -179,16 +172,15 @@ class SettingsFragment : Fragment() {
         if (_binding == null) return
         val ctx = requireContext()
         if (!ChainRouteManager.isEnabled(ctx)) {
-            binding.textChainStatus.text = "关闭。开启后可让指定域名从自己的 VPS 出去"
+            binding.textChainStatus.text = "关闭。开启后所有流量都从自己的 VPS 出去"
             return
         }
         val exit = ChainRouteManager.getExit(ctx)
         val dialer = ChainRouteManager.getDialer(ctx)
-        val count = ChainRouteManager.getDomains(ctx).size
         binding.textChainStatus.text = when {
-            exit.isEmpty() || count == 0 -> "已开启，但还没配置完（需选出口节点并填域名）"
-            dialer.isEmpty() -> "$count 个域名 → $exit（直连，单跳）"
-            else -> "$count 个域名 → $dialer → $exit"
+            exit.isEmpty() -> "已开启，但还没选出口节点"
+            dialer.isEmpty() -> "全部流量 → $exit（直连，单跳）"
+            else -> "全部流量 → $dialer → $exit"
         }
     }
 
