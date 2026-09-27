@@ -512,13 +512,33 @@ class ClashVpnService : VpnService() {
             // 等待一小段时间确保 Clash 核心完全启动
             delay(500)
             try {
+                // 依次尝试：上次用的组 → 内核里的其它代理组 → GLOBAL。
+                // 不能像以前那样「失败就退 GLOBAL」：规则模式下 GLOBAL 不参与路由，
+                // 选上去毫无效果，却让日志显示成功，排查时极具误导性。
+                val candidates = LinkedHashSet<String>()
+                if (groupName.isNotEmpty()) candidates.add(groupName)
                 try {
-                    Mobile.selectProxy(groupName, savedProxy)
-                    Log.d(TAG, "Successfully restored proxy: $savedProxy in group: $groupName")
+                    val json = Mobile.getProxyGroups() ?: "[]"
+                    Regex("\"([^\"]+)\"").findAll(json).forEach { candidates.add(it.groupValues[1]) }
                 } catch (e: Exception) {
-                    // 如果第一个组失败，尝试 GLOBAL
-                    Mobile.selectProxy("GLOBAL", savedProxy)
-                    Log.d(TAG, "Successfully restored proxy: $savedProxy in group: GLOBAL")
+                    Log.w(TAG, "getProxyGroups failed", e)
+                }
+                candidates.add("GLOBAL")
+
+                var restored: String? = null
+                for (g in candidates) {
+                    try {
+                        Mobile.selectProxy(g, savedProxy)
+                        restored = g
+                        break
+                    } catch (e: Exception) {
+                        // 该组不含这个节点、或是 url-test 这类不可手选的组，继续试下一个
+                    }
+                }
+                if (restored == null) {
+                    Log.w(TAG, "No group accepted proxy selection: $savedProxy")
+                } else {
+                    Log.d(TAG, "Successfully restored proxy: $savedProxy in group: $restored")
                 }
                 // 恢复成功后更新通知和磁贴
                 updateNotification(savedProxy)

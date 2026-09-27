@@ -168,12 +168,21 @@ func GetConfigDir() string {
 	return filepath.Dir(C.Path.Config())
 }
 
-// ProxyInfo 代理信息
+// ProxyInfo 代理信息。
+//
+// 代理组（Selector/URLTest/Fallback/...）额外带 Now/All/Selectable，供界面做
+// 「按组浏览、组内选节点」——这几项必须来自内核而不是 UI 自己解析 config.yaml，
+// 否则组成员被内核清洗或订阅重载后，界面显示的和实际生效的会对不上。
 type ProxyInfo struct {
 	Name   string `json:"name"`
 	Type   string `json:"type"`
 	Alive  bool   `json:"alive"`
 	Server string `json:"server"`
+
+	// 以下仅代理组有值
+	Now        string   `json:"now,omitempty"`   // 组当前选中的成员
+	All        []string `json:"all,omitempty"`   // 组成员（配置顺序）
+	Selectable bool     `json:"selectable"`      // 能否手动选择（url-test/fallback 不能）
 }
 
 // GetProxies 获取所有代理信息 (JSON 格式)
@@ -192,15 +201,79 @@ func GetProxies() string {
 				server = addr
 			}
 		}
-		result[name] = ProxyInfo{
+		info := ProxyInfo{
 			Name:   proxy.Name(),
 			Type:   proxy.Type().String(),
 			Alive:  proxy.Alive(),
 			Server: server,
 		}
+		fillGroupInfo(proxy, &info)
+		result[name] = info
 	}
 
 	data, _ := json.Marshal(result)
+	return string(data)
+}
+
+// fillGroupInfo 给代理组补上成员与当前选中。非代理组的 proxy 原样返回。
+//
+// GetProxies(false) 的 false 是 touch 参数：不要把「界面刷新」算成一次使用，
+// 否则 url-test 组的惰性测速会被界面刷新不断唤醒。
+func fillGroupInfo(proxy C.Proxy, info *ProxyInfo) {
+	adp, ok := proxy.(*adapter.Proxy)
+	if !ok {
+		return
+	}
+	if g, ok := adp.ProxyAdapter.(interface{ GetProxies(bool) []C.Proxy }); ok {
+		members := g.GetProxies(false)
+		info.All = make([]string, 0, len(members))
+		for _, m := range members {
+			info.All = append(info.All, m.Name())
+		}
+	}
+	if n, ok := adp.ProxyAdapter.(interface{ Now() string }); ok {
+		info.Now = n.Now()
+	}
+	if _, ok := adp.ProxyAdapter.(outboundgroup.SelectAble); ok {
+		info.Selectable = true
+	}
+}
+
+// isGroupType 判断是不是代理组（相对于具体节点）。
+func isGroupType(t C.AdapterType) bool {
+	switch t {
+	case C.Selector, C.URLTest, C.Fallback, C.LoadBalance, C.Relay:
+		return true
+	}
+	return false
+}
+
+// GetProxyGroups 返回代理组名，按配置文件里的出现顺序，JSON 数组。
+//
+// 顺序取自内置的 GLOBAL 组：它的成员就是 config 解析时的 proxyList，
+// 即「DIRECT、REJECT、各节点、各代理组」的原始顺序（见 config/config.go）。
+// 界面需要这个顺序才能把组按机场的排布展示，map 迭代是乱序的、不能用。
+func GetProxyGroups() string {
+	proxies := tunnel.Proxies()
+	global, exist := proxies["GLOBAL"]
+	if !exist {
+		return "[]"
+	}
+	adp, ok := global.(*adapter.Proxy)
+	if !ok {
+		return "[]"
+	}
+	g, ok := adp.ProxyAdapter.(interface{ GetProxies(bool) []C.Proxy })
+	if !ok {
+		return "[]"
+	}
+	names := make([]string, 0, 8)
+	for _, m := range g.GetProxies(false) {
+		if isGroupType(m.Type()) {
+			names = append(names, m.Name())
+		}
+	}
+	data, _ := json.Marshal(names)
 	return string(data)
 }
 

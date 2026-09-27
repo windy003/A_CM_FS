@@ -18,6 +18,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.clashmeta.ClashMetaApp
 import com.example.clashmeta.core.ClashVpnService
+import com.example.clashmeta.data.ManualProxyManager
 import com.example.clashmeta.data.ProxyClipboard
 import com.example.clashmeta.data.ProxySelectionManager
 import com.example.clashmeta.databinding.FragmentProxyBinding
@@ -40,6 +41,13 @@ class ProxyFragment : Fragment() {
     private val binding get() = _binding!!
 
     private lateinit var adapter: ProxyAdapter
+    private lateinit var groupAdapter: ProxyGroupAdapter
+
+    /** 代理组（配置顺序，来自内核 GetProxyGroups） */
+    private var groups: List<ProxyRow> = emptyList()
+
+    /** 用户当前在顶部标签里浏览的组；null 表示配置里没有代理组 */
+    private var currentGroup: String? = null
 
     private var proxies: Map<String, ProxyInfo> = emptyMap()
     private var errorMessage: String? = null
@@ -80,6 +88,11 @@ class ProxyFragment : Fragment() {
         binding.recyclerProxy.layoutManager = LinearLayoutManager(requireContext())
         binding.recyclerProxy.adapter = adapter
 
+        groupAdapter = ProxyGroupAdapter(onPick = { pickGroup(it) })
+        binding.recyclerGroups.layoutManager =
+            LinearLayoutManager(requireContext(), LinearLayoutManager.HORIZONTAL, false)
+        binding.recyclerGroups.adapter = groupAdapter
+
         binding.toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 com.example.clashmeta.R.id.action_test_all -> {
@@ -99,6 +112,18 @@ class ProxyFragment : Fragment() {
                 else -> false
             }
         }
+    }
+
+    /**
+     * 切换顶部标签浏览的组。只改「看哪个组」，不动内核里的任何选择。
+     */
+    private fun pickGroup(name: String) {
+        if (currentGroup == name) return
+        currentGroup = name
+        adapter.selectedProxy = proxies[name]?.now
+        adapter.delayResults.keys.retainAll(proxies.keys)
+        render()
+        binding.recyclerProxy.scrollToPosition(0)
     }
 
     /** 节点右侧 3 点菜单：复制分享链接 / 删除节点 */
@@ -135,6 +160,8 @@ class ProxyFragment : Fragment() {
             val result = withContext(Dispatchers.IO) {
                 val configFile = ClashMetaApp.instance.getConfigFile()
                 val r = ProxyClipboard.deleteProxy(configFile, name)
+                // 同步从手动节点存档里移除，否则下次重建 config.yaml 时它会被重新注入回来
+                if (r.getOrDefault(false)) ManualProxyManager.remove(name)
                 if (r.getOrDefault(false) && Mobile.isRunning()) {
                     try { Mobile.reloadConfig() } catch (e: Exception) {
                         Log.e("ProxyFragment", "reloadConfig after delete failed", e)
@@ -232,6 +259,10 @@ class ProxyFragment : Fragment() {
                     val reason = loadError?.message ?: "内核已重载但节点未出现（配置可能被订阅覆盖或写入未生效）"
                     return@withContext Result.failure(IllegalArgumentException("节点未能真正导入：$reason"))
                 }
+
+                // 手动粘贴的节点不属于任何订阅，单独存一份；否则切换/更新订阅时
+                // config.yaml 被整份覆盖，节点和它在 select 组里的成员身份一起消失
+                ManualProxyManager.captureFromConfig(configFile, importedNames)
                 r
             }
             val c = context ?: return@launch
@@ -282,7 +313,19 @@ class ProxyFragment : Fragment() {
         activePopup = null
     }
 
+    /**
+     * 当前要展示的行：优先按「当前组的成员」并保持组内顺序（机场的排布是有意义的，
+     * 按名字排序会把 emoji/中文名冲散）。成员本身可能又是一个组，clash 允许组里套组。
+     *
+     * 配置里没有 proxy-groups 时退回展示全部节点——粘贴节点建的最小配置就是这种情况。
+     */
     private fun filteredProxies(): List<ProxyRow> {
+        val members = currentGroup?.let { proxies[it]?.all }
+        if (members != null) {
+            return members.mapNotNull { name ->
+                proxies[name]?.let { ProxyRow(name, it, isGroup = it.type in groupTypes) }
+            }
+        }
         return proxies.entries
             .filter { it.value.type !in groupTypes }
             .map { ProxyRow(it.key, it.value) }
@@ -309,17 +352,26 @@ class ProxyFragment : Fragment() {
                     proxies = parsed ?: emptyMap()
                     if (proxies.isNotEmpty()) errorMessage = null
 
-                    val currentSelected = withContext(Dispatchers.IO) {
+                    // 组名与顺序取自内核（配置顺序），不自己解析 config.yaml
+                    val groupNames = withContext(Dispatchers.IO) {
                         try {
-                            Mobile.getSelectedProxy("🚀 节点选择").takeIf { it.isNotEmpty() }
-                                ?: Mobile.getSelectedProxy("GLOBAL")
+                            val gj = Mobile.getProxyGroups() ?: "[]"
+                            Gson().fromJson<List<String>>(
+                                gj, object : TypeToken<List<String>>() {}.type
+                            ) ?: emptyList()
                         } catch (e: Exception) {
-                            null
+                            Log.e("ProxyFragment", "getProxyGroups failed", e)
+                            emptyList()
                         }
                     }
-                    if (!currentSelected.isNullOrEmpty()) {
-                        adapter.selectedProxy = currentSelected
+                    groups = groupNames.mapNotNull { n ->
+                        proxies[n]?.let { ProxyRow(n, it, isGroup = true) }
                     }
+                    // 保留用户正在看的那个组；组没了（多半是切了订阅）就回到第一个
+                    if (currentGroup == null || groups.none { it.name == currentGroup }) {
+                        currentGroup = groups.firstOrNull()?.name
+                    }
+                    adapter.selectedProxy = currentGroup?.let { proxies[it]?.now }
                 }
             } else {
                 errorMessage = "未找到配置，请先导入订阅"
@@ -335,6 +387,9 @@ class ProxyFragment : Fragment() {
     private fun render() {
         if (_binding == null) return
         val list = filteredProxies()
+
+        binding.recyclerGroups.visibility = if (groups.isEmpty()) View.GONE else View.VISIBLE
+        groupAdapter.submit(groups, currentGroup)
 
         when {
             isLoading && proxies.isEmpty() -> {
@@ -369,22 +424,40 @@ class ProxyFragment : Fragment() {
         }
     }
 
+    /**
+     * 在**当前浏览的组**里选中节点。
+     *
+     * 早先这里把组名写死成 `🚀 节点选择`，选不中就退到 `GLOBAL`。那只对「组名恰好叫这个」的机场
+     * 有效——而 `GLOBAL` 组在 `mode: rule` 下根本不参与路由，内核会照单全收却毫无效果，
+     * 表现为「点了节点没反应，流量一直走组里第一个成员」（实测 BoostNet 的组就叫 BoostNet）。
+     * 现在组名来自内核，选择落在用户真正在看的那个组上。
+     */
     private fun selectProxy(proxyName: String) {
         val ctx = context ?: return
+        val group = currentGroup
+        val groupInfo = group?.let { proxies[it] }
+        // url-test / fallback 这类自动组不接受手动指定，内核会报错；提前说清楚而不是静默失败
+        if (groupInfo != null && !groupInfo.selectable) {
+            Toast.makeText(ctx, "「$group」是自动选择组，不能手动指定节点", Toast.LENGTH_SHORT).show()
+            return
+        }
         viewLifecycleOwner.lifecycleScope.launch {
             try {
-                var usedGroup = "🚀 节点选择"
-                withContext(Dispatchers.IO) {
-                    try {
-                        Mobile.selectProxy("🚀 节点选择", proxyName)
-                    } catch (e: Exception) {
+                val usedGroup = withContext(Dispatchers.IO) {
+                    if (group != null) {
+                        Mobile.selectProxy(group, proxyName)
+                        group
+                    } else {
+                        // 配置里没有代理组（粘贴节点建的最小配置），只能落到 GLOBAL
                         Mobile.selectProxy("GLOBAL", proxyName)
-                        usedGroup = "GLOBAL"
+                        "GLOBAL"
                     }
                 }
                 adapter.selectedProxy = proxyName
                 adapter.notifyDataSetChanged()
                 ProxySelectionManager.saveSelectedProxy(ctx, proxyName, usedGroup)
+                // 组的 now 变了，重新拉一次让顶部标签同步
+                refresh()
 
                 if (ClashVpnService.isVpnRunning(ctx)) {
                     val intent = Intent(ctx, ClashVpnService::class.java).apply {

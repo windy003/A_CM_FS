@@ -60,6 +60,10 @@ object LanProxyManager {
             if (!file.exists()) return
             val ctx = ClashMetaApp.instance
             var patched = patchConfig(file.readText(), isEnabled(ctx), getPort(ctx))
+            // 手动粘贴的节点（自己的 VPS 等）不在订阅里，切换/更新订阅会把它们连同 config.yaml
+            // 一起覆盖掉，这里重新注入。必须排在 ChainRouteManager 之前——后者要能在 proxies
+            // 里找到出口节点名才会注入 dialer-proxy 和 MATCH。
+            patched = ManualProxyManager.injectInto(patched)
             // QUIC(UDP 443) 分流：境外 QUIC 转发到代理(照抄 Xray)、国内 QUIC 直连。
             // TikTok 直连裸 IP 的 QUIC 无域名，靠这条按 IP 归属地放行走代理，修复缩略图加载。
             patched = QuicRuleManager.patchRules(patched)

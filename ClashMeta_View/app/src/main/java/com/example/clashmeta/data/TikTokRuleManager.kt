@@ -34,24 +34,6 @@ object TikTokRuleManager {
     private val INLINE_EMPTY_RULES = Regex("^rules:\\s*\\[\\s*]\\s*$")
     private val LIST_ITEM_INDENT = Regex("^(\\s*)-.*$")
 
-    /**
-     * 从最终 MATCH/FINAL 规则取"兜底代理组"名，例如 `MATCH,CoffeeCloud` → CoffeeCloud。
-     * 组名可能带空格(如 `🐟 漏网之鱼`)，故捕获到行尾为止，而非遇到空白就截断。
-     */
-    private val FINAL_TARGET =
-        Regex("(?:MATCH|FINAL)\\s*,\\s*(.+)", RegexOption.IGNORE_CASE)
-
-    /** 去掉捕获到的目标名两端的引号与空白，例如 `'🐟 漏网之鱼'` → `🐟 漏网之鱼`。 */
-    private fun cleanTarget(raw: String): String {
-        var s = raw.trim()
-        if (s.length >= 2 &&
-            ((s.first() == '\'' && s.last() == '\'') || (s.first() == '"' && s.last() == '"'))
-        ) {
-            s = s.substring(1, s.length - 1)
-        }
-        return s
-    }
-
     /** 匹配本类注入过的规则行，用于幂等：先删后插。 */
     private val INJECTED = Regex(
         "^\\s*-\\s*['\"]?DOMAIN(?:-KEYWORD|-SUFFIX),(?:" +
@@ -65,7 +47,7 @@ object TikTokRuleManager {
      * 若找不到可用的兜底代理组(如最终是 MATCH,DIRECT)，则不注入(没有代理目标可用)。
      */
     fun patchRules(configText: String): String {
-        val target = FINAL_TARGET.find(configText)?.groupValues?.get(1)?.let(::cleanTarget)
+        val target = FallbackGroup.resolve(configText)
         if (target == null || target.equals("DIRECT", true) || target.equals("REJECT", true)) {
             return configText
         }

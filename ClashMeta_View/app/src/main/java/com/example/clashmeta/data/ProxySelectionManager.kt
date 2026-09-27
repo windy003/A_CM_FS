@@ -21,7 +21,7 @@ object ProxySelectionManager {
     /**
      * 保存用户选择的节点
      */
-    fun saveSelectedProxy(context: Context, proxyName: String, groupName: String = "🚀 节点选择") {
+    fun saveSelectedProxy(context: Context, proxyName: String, groupName: String) {
         getPrefs(context).edit().apply {
             putString(KEY_SELECTED_PROXY, proxyName)
             putString(KEY_PROXY_GROUP, groupName)
@@ -38,10 +38,15 @@ object ProxySelectionManager {
     }
 
     /**
-     * 获取之前保存的代理组名称
+     * 获取之前保存的代理组名称；没有记录时返回空串。
+     *
+     * 这里以前默认 `🚀 节点选择`——那是国内订阅生成器的约定俗成名字，不是所有机场都用
+     * （实测 BoostNet 的组就叫 `BoostNet`）。猜错了就会把选择落到不存在的组、
+     * 进而退到规则模式下根本不参与路由的 GLOBAL，表现为「选了节点没反应」。
+     * 现在组名一律由内核给出，不再猜。
      */
     fun getProxyGroup(context: Context): String {
-        return getPrefs(context).getString(KEY_PROXY_GROUP, "🚀 节点选择") ?: "🚀 节点选择"
+        return getPrefs(context).getString(KEY_PROXY_GROUP, "") ?: ""
     }
 
     /**

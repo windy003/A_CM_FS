@@ -9,8 +9,8 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.clashmeta.databinding.ItemProxyBinding
 import com.google.android.material.color.MaterialColors
 
-/** 列表项数据：节点名 + 信息 */
-data class ProxyRow(val name: String, val info: ProxyInfo)
+/** 列表项数据：节点名 + 信息。[isGroup] 为 true 时这一行本身是个代理组（组里可以套组）。 */
+data class ProxyRow(val name: String, val info: ProxyInfo, val isGroup: Boolean = false)
 
 class ProxyAdapter(
     private val onSelect: (String) -> Unit,
@@ -110,7 +110,9 @@ class ProxyAdapter(
             binding.btnTest.isEnabled = !isTesting
             binding.btnTest.setOnClickListener { onTest(name) }
 
-            // 更多操作按钮（弹出菜单：复制节点信息等）
+            // 更多操作按钮（弹出菜单：复制节点信息等）。
+            // 代理组不是 config.yaml 里的节点，复制分享链接/删除节点对它没有意义，直接隐藏。
+            binding.btnMenu.visibility = if (row.isGroup) View.GONE else View.VISIBLE
             binding.btnMenu.setOnClickListener { onMenu(name, it) }
 
             // 点击整行选择节点

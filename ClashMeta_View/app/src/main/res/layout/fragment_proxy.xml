@@ -17,6 +17,18 @@
             app:menu="@menu/menu_proxy" />
     </com.google.android.material.appbar.AppBarLayout>
 
+    <!-- 代理组标签（横向）。只有一个组时由代码隐藏，免得占地方 -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recycler_groups"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:clipToPadding="false"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="8dp"
+        android:orientation="horizontal"
+        android:visibility="gone"
+        app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager" />
+
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent">

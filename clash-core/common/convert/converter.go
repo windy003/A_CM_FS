@@ -142,6 +142,42 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 				tuic["udp-relay-mode"] = udpRelayMode
 			}
 
+		case "anytls":
+			// anytls://[password@]host[:port]/?sni=..&insecure=1#name
+			// 见 https://github.com/anytls/anytls-go/blob/main/docs/uri_scheme.md
+			urlAnytls, err := url.Parse(line)
+			if err != nil {
+				continue
+			}
+
+			query := urlAnytls.Query()
+			anytls := make(map[string]any, 10)
+
+			anytls["name"] = uniqueName(names, urlAnytls.Fragment)
+			anytls["type"] = scheme
+			anytls["server"] = urlAnytls.Hostname()
+			port := urlAnytls.Port()
+			if port == "" {
+				port = "443" // 规范：端口省略时默认 443
+			}
+			anytls["port"] = port
+			anytls["password"] = urlAnytls.User.Username()
+			// UDP 走 udp-over-tcp，协议一定支持；URI 里没有该字段，默认开启
+			anytls["udp"] = true
+			insecure := query.Get("insecure")
+			if insecure == "" {
+				insecure = query.Get("allowInsecure") // 别家客户端常见写法
+			}
+			anytls["skip-cert-verify"], _ = strconv.ParseBool(insecure)
+
+			if sni := query.Get("sni"); sni != "" {
+				anytls["sni"] = sni
+			}
+			if alpn := query.Get("alpn"); alpn != "" {
+				anytls["alpn"] = strings.Split(alpn, ",")
+			}
+
+			proxies = append(proxies, anytls)
 		case "trojan":
 			urlTrojan, err := url.Parse(line)
 			if err != nil {

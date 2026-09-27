@@ -9,7 +9,7 @@ import java.net.URLEncoder
 
 /**
  * 分享链接 <-> Clash 节点配置 互转。
- * 支持：ss:// vmess:// trojan:// vless://
+ * 支持：ss:// vmess:// trojan:// vless:// anytls://
  * - decode: 分享链接 -> Clash 代理映射（可直接写入 config.yaml 的 proxies）
  * - encode: Clash 代理映射 -> 分享链接
  */
@@ -17,7 +17,7 @@ object ShareLink {
 
     private const val TAG = "ShareLink"
 
-    private val schemes = listOf("ss://", "vmess://", "trojan://", "vless://")
+    private val schemes = listOf("ss://", "vmess://", "trojan://", "vless://", "anytls://")
 
     fun isShareLink(text: String): Boolean {
         val t = text.trim()
@@ -42,6 +42,7 @@ object ShareLink {
                 uri.startsWith("vmess://", true) -> decodeVmess(uri)
                 uri.startsWith("trojan://", true) -> decodeTrojan(uri)
                 uri.startsWith("vless://", true) -> decodeVless(uri)
+                uri.startsWith("anytls://", true) -> decodeAnyTLS(uri)
                 else -> null
             }
         } catch (e: Exception) {
@@ -58,6 +59,7 @@ object ShareLink {
                 "vmess" -> encodeVmess(p)
                 "trojan" -> encodeTrojan(p)
                 "vless" -> encodeVless(p)
+                "anytls" -> encodeAnyTLS(p)
                 else -> null
             }
         } catch (e: Exception) {
@@ -416,4 +418,81 @@ object ShareLink {
         p["name"]?.toString()?.let { if (it.isNotEmpty()) sb.append('#').append(urlEncode(it)) }
         return sb.toString()
     }
+
+    // ---------------- AnyTLS ----------------
+    //
+    // anytls://[password@]host[:port]/?sni=..&insecure=1#name
+    // 见 anytls-go/docs/uri_scheme.md：端口省略时默认 443，insecure 用 1/0。
+    // 参数故意只有 sni / insecure 两个——官方文档明确这个 URI 只承载连上服务器所必需的信息。
+
+    private fun decodeAnyTLS(uri: String): Map<String, Any?> {
+        var s = uri.substring(9)
+        val name = if (s.contains('#')) urlDecode(s.substringAfterLast('#')) else ""
+        s = s.substringBefore('#')
+        var query = ""
+        if (s.contains('?')) {
+            query = s.substringAfter('?')
+            s = s.substringBefore('?')
+        }
+        // 结构里 host 之后允许带一个 '/'（anytls://pw@host/?sni=x）
+        s = s.trimEnd('/')
+        val password = if (s.contains('@')) urlDecode(s.substringBeforeLast('@')) else ""
+        val (host, port) = splitHostPort(s.substringAfterLast('@'), 443)
+        val qp = parseQuery(query)
+
+        val m = LinkedHashMap<String, Any?>()
+        m["name"] = name.ifEmpty { "$host:$port" }
+        m["type"] = "anytls"
+        m["server"] = host
+        m["port"] = port
+        m["password"] = password
+        qp["sni"]?.let { if (it.isNotEmpty()) m["sni"] = it }
+        // insecure 是规范里的名字；allowInsecure 是别的客户端常见的写法，一并认
+        if (isTrue(qp["insecure"]) || isTrue(qp["allowInsecure"])) m["skip-cert-verify"] = true
+        // anytls 的 UDP 走 udp-over-tcp，协议本身一定支持；分享链接里没有这个字段，
+        // 默认打开，否则 QUIC(UDP 443) 分流会在这个节点上直接断掉。
+        m["udp"] = true
+        return m
+    }
+
+    private fun encodeAnyTLS(p: Map<String, Any?>): String {
+        val host = p["server"]?.toString() ?: ""
+        val port = p["port"]?.toString() ?: "443"
+        val q = LinkedHashMap<String, String>()
+        p["sni"]?.toString()?.let { if (it.isNotEmpty()) q["sni"] = it }
+        if (p["skip-cert-verify"] == true) q["insecure"] = "1"
+
+        val sb = StringBuilder("anytls://")
+            .append(urlEncode(p["password"]?.toString() ?: "")).append('@')
+            .append(hostForUri(host)).append(':').append(port).append('/')
+        if (q.isNotEmpty()) sb.append('?').append(buildQuery(q))
+        p["name"]?.toString()?.let { if (it.isNotEmpty()) sb.append('#').append(urlEncode(it)) }
+        return sb.toString()
+    }
+
+    private fun isTrue(v: String?): Boolean =
+        v == "1" || v.equals("true", ignoreCase = true)
+
+    /** 拆 host:port，兼容 IPv6 的 [::1]:443 写法；没有端口时用 [defaultPort]。 */
+    private fun splitHostPort(hostport: String, defaultPort: Int): Pair<String, Int> {
+        if (hostport.startsWith("[")) {
+            val close = hostport.indexOf(']')
+            if (close > 0) {
+                val host = hostport.substring(1, close)
+                val rest = hostport.substring(close + 1)
+                val port = if (rest.startsWith(":")) rest.substring(1).toIntOrNull() else null
+                return host to (port ?: defaultPort)
+            }
+        }
+        // 冒号多于一个说明是没加方括号的裸 IPv6，此时整串都是 host
+        if (hostport.count { it == ':' } == 1) {
+            val port = hostport.substringAfterLast(':').toIntOrNull()
+            if (port != null) return hostport.substringBeforeLast(':') to port
+        }
+        return hostport to defaultPort
+    }
+
+    /** IPv6 地址写进 URI 要加方括号。 */
+    private fun hostForUri(host: String): String =
+        if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
 }
