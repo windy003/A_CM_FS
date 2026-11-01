@@ -286,12 +286,18 @@ object ChainRouteManager {
         var end = start
         for (i in (start + 1) until lines.size) {
             val line = lines[i]
-            // 空行不算块结束（订阅里常见空行分隔）；顶格的非空行才是下一个顶层键
-            if (line.isNotBlank() && !line.first().isWhitespace()) break
+            // 空行不算块结束（订阅里常见空行分隔）；顶格的非空行才是下一个顶层键。
+            // 顶格的 `- xxx` 是本块的列表项（snakeyaml block dump 的写法，粘贴过节点后
+            // 配置就是这个风格），不是新键，否则节点上的 dialer-proxy 会挂不上去。
+            if (line.isNotBlank() && !line.first().isWhitespace() && !isListItem(line)) break
             end = i
         }
         return if (end > start) (start + 1)..end else null
     }
+
+    /** YAML 顶格列表项（`- ` 或单独一个 `-`）。`---` 文档分隔符不算。 */
+    private fun isListItem(line: String): Boolean =
+        line == "-" || line.startsWith("- ")
 
     private fun nameOf(line: String): String? {
         val m = NAME_FIELD.find(line) ?: return null

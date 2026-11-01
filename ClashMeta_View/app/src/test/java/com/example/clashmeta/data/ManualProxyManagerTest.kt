@@ -134,4 +134,60 @@ class ManualProxyManagerTest {
     fun `空列表原样返回`() {
         assertEquals(blockGroupConfig, ManualProxyManager.inject(blockGroupConfig, emptyList()))
     }
+
+    /**
+     * ProxyClipboard 用 snakeyaml 整份 dump 写回配置后的样子：列表项顶格写 `- xxx`。
+     * 曾经的 bug 是把顶格的 `-` 当成下一个顶层键，看不到已有节点，于是每次启动都再注入
+     * 一遍，内核报 "proxy xxx is the duplicate name"、VPN 起不来。
+     */
+    private val snakeyamlConfig = """
+        mixed-port: 7890
+        proxies:
+        - {name: 机场HK, type: ss, server: hk.airport.com, port: 443, cipher: aes-128-gcm, password: pw1}
+        proxy-groups:
+        - name: 🚀 节点选择
+          type: select
+          proxies:
+          - ♻️ 自动选择
+          - 机场HK
+        - name: ♻️ 自动选择
+          type: url-test
+          proxies:
+          - 机场HK
+        rules:
+        - MATCH,🚀 节点选择
+    """.trimIndent()
+
+    @Test
+    fun `snakeyaml block 风格配置反复注入不累积`() {
+        val once = ManualProxyManager.inject(snakeyamlConfig, listOf(vps))
+        val twice = ManualProxyManager.inject(once, listOf(vps))
+
+        assertEquals(once, twice)
+        assertEquals(1, proxyNames(twice).count { it == "MyVPS" })
+        assertEquals(1, groupMembers(twice, "🚀 节点选择").count { it == "MyVPS" })
+        // 原有成员不能被挤到组外（缩进错位会让它们变成 proxy-groups 的另一个条目）
+        assertEquals(listOf("♻️ 自动选择", "机场HK", "MyVPS"), groupMembers(twice, "🚀 节点选择"))
+    }
+
+    @Test
+    fun `已经重复的手动节点会被自动清理`() {
+        val duplicated = """
+            mixed-port: 7890
+            proxies:
+            - {name: MyVPS, type: ss, server: 1.2.3.4, port: 8388, cipher: aes-128-gcm, password: pw}
+            - name: MyVPS
+              type: ss
+              server: 1.2.3.4
+              port: 8388
+              cipher: aes-128-gcm
+              password: pw
+            rules:
+            - MATCH,DIRECT
+        """.trimIndent()
+
+        val out = ManualProxyManager.inject(duplicated, listOf(vps))
+
+        assertEquals(1, proxyNames(out).count { it == "MyVPS" })
+    }
 }

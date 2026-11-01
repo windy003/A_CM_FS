@@ -154,15 +154,21 @@ object ManualProxyManager {
         return try {
             var lines = configText.split("\n").toMutableList()
 
+            // 0) 自愈：老版本可能已经把同一个手动节点重复注入过（内核会以
+            //    "proxy xxx is the duplicate name" 拒绝整份配置、VPN 起不来），
+            //    这里先把多余副本删掉，用户不用手动改 config.yaml。
+            lines = dedupeManualNodes(lines, nodes.mapNotNull { it["name"]?.toString() }.toSet())
+                .toMutableList()
+
             val existing = proxyNames(lines)
             val pending = nodes.filter {
                 val n = it["name"]?.toString().orEmpty()
                 n.isNotEmpty() && n !in existing
             }
-            if (pending.isEmpty()) return configText
-
-            lines = insertProxies(lines, pending).toMutableList()
-            lines = addToSelectGroups(lines, pending.map { it["name"].toString() }).toMutableList()
+            if (pending.isNotEmpty()) {
+                lines = insertProxies(lines, pending).toMutableList()
+                lines = addToSelectGroups(lines, pending.map { it["name"].toString() }).toMutableList()
+            }
             lines.joinToString("\n")
         } catch (e: Exception) {
             // 注入失败不能连累 VPN 启动，原样返回
@@ -177,6 +183,48 @@ object ManualProxyManager {
         val out = HashSet<String>()
         for (i in range) nameOf(lines[i])?.let { out.add(it) }
         return out
+    }
+
+    /**
+     * 删掉 `proxies:` 块里手动节点的重复条目，每个名字只保留第一条。
+     *
+     * 旧版本 [blockRange] 把 snakeyaml block dump 顶格的 `- xxx` 误判成下一个顶层键，
+     * 导致 [proxyNames] 看不到已有节点，于是每次启动都再注入一遍；配置里堆出同名节点后，
+     * 内核直接报 `proxy xxx is the duplicate name`，VPN 完全起不来。这个函数负责把已经
+     * 堆出来的副本清掉。只处理手动节点名，避免误删订阅自己的节点。
+     *
+     * 兼容 flow（单行 `- {name: ...}`）和 block（`- name: ...` 多行）两种写法。
+     */
+    private fun dedupeManualNodes(lines: List<String>, names: Set<String>): List<String> {
+        if (names.isEmpty()) return lines
+        val range = blockRange(lines, TOP_LEVEL_PROXIES) ?: return lines
+
+        val drop = HashSet<Int>()
+        val seen = HashSet<String>()
+        var i = range.first
+        while (i <= range.last) {
+            val m = ENTRY_START.find(lines[i])
+            if (m == null) {
+                i++
+                continue
+            }
+            val entryIndent = m.groupValues[1]
+            var end = i + 1
+            while (end <= range.last) {
+                val nm = ENTRY_START.find(lines[end])
+                if (nm != null && nm.groupValues[1].length <= entryIndent.length) break
+                end++
+            }
+
+            // block 写法里 name 不一定在第一行，整条找一遍
+            val name = (i until end).firstNotNullOfOrNull { nameOf(lines[it]) }
+            if (name != null && name in names && !seen.add(name)) {
+                for (j in i until end) drop.add(j)
+            }
+            i = end
+        }
+        if (drop.isEmpty()) return lines
+        return lines.filterIndexed { idx, _ -> idx !in drop }
     }
 
     /** 把节点定义插到 `proxies:` 块顶部；块为内联空表或整个缺失时也兜住。 */
@@ -273,13 +321,16 @@ object ManualProxyManager {
         var memberIndent: String? = null
         for (i in (blockIdx + 1) until to) {
             val lm = LIST_ITEM_INDENT.matchEntire(out[i]) ?: break
-            if (lm.groupValues[1].length <= keyIndent.length) break
+            // 成员行缩进可以 >= 键缩进：snakeyaml 的 block dump 把成员写成和 `proxies:`
+            // 同列（`proxies:\n  - x` 里 `-` 与 `proxies` 对齐），只有缩进更浅才是下一个键。
+            if (lm.groupValues[1].length < keyIndent.length) break
             memberIndent = lm.groupValues[1]
             memberEnd = i
         }
         val have = (blockIdx + 1..memberEnd)
             .map { unquote(out[it].trim().removePrefix("-").trim()) }.toSet()
-        val indent = memberIndent ?: "$keyIndent  "
+        // 没有现成成员时跟随键缩进（snakeyaml 风格），随大流比凭空加两格安全
+        val indent = memberIndent ?: keyIndent
         val add = names.indices.filter { names[it] !in have }.map { "$indent- " + quoted[it] }
         if (add.isEmpty()) return 0
         out.addAll(memberEnd + 1, add)
@@ -293,12 +344,18 @@ object ManualProxyManager {
         var end = start
         for (i in (start + 1) until lines.size) {
             val line = lines[i]
-            // 空行不算块结束（订阅里常见空行分隔）；顶格的非空行才是下一个顶层键
-            if (line.isNotBlank() && !line.first().isWhitespace()) break
+            // 空行不算块结束（订阅里常见空行分隔）；顶格的非空行才是下一个顶层键。
+            // 但顶格的 `- xxx` 不是键，是本块的列表项——snakeyaml 的 block dump 就长这样
+            // （`ProxyClipboard` 写回配置后整份都是），漏判会让已有节点全部看不见。
+            if (line.isNotBlank() && !line.first().isWhitespace() && !isListItem(line)) break
             end = i
         }
         return if (end > start) (start + 1)..end else null
     }
+
+    /** YAML 顶格列表项（`- ` 或单独一个 `-`）。`---` 文档分隔符不算。 */
+    private fun isListItem(line: String): Boolean =
+        line == "-" || line.startsWith("- ")
 
     /** 块内列表项的缩进，取不到默认两空格。 */
     private fun detectItemIndent(lines: List<String>, blockIdx: Int): String {
