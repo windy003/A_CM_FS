@@ -11,7 +11,8 @@ package com.example.clashmeta.data
  * 由节点原生转发 UDP，QUIC 端到端握手即可完成——裸 IP 也无所谓，因为按 IP 归属地分流即可：
  *   - 国内 QUIC(GEOIP,CN) → DIRECT，直连不绕路；
  *   - 其余(境外)QUIC     → 代理组(TikTok 的裸 IP CDN 走这条)。
- * 代理组名自动取自最终 MATCH/FINAL 规则(兜底组)。
+ * 代理组名由 [RuleTargetResolver] 决定：优先订阅自己给 TikTok 指定的组，其次域名规则里
+ * 最常用的主代理组，最后才退回 MATCH/FINAL 的兜底组（兜底组常被手动节点占据，不能盲信）。
  *
  * 注入到 rules 顶部(最高优先级)。注入点统一收敛在 [LanProxyManager.applyToConfigFile]。
  */
@@ -32,13 +33,12 @@ object QuicRuleManager {
 
     /**
      * 把 QUIC 分流规则插到 rules 顶部。幂等：多次调用不会累积重复行。
-     * 若找不到可用兜底代理组(如 MATCH,DIRECT)，退化为仅「国内直连 + 其余 REJECT」以保底。
+     * 目标见 [RuleTargetResolver]（优先订阅自己的 TikTok 分流目标，其次主代理组，最后兜底组）。
+     * 若完全找不到可用代理目标(如 MATCH,DIRECT)，退化为仅「国内直连 + 其余 REJECT」以保底。
      */
     fun patchRules(configText: String): String {
-        val target = FallbackGroup.resolve(configText)
-        val abroadAction = if (target == null || target.equals("DIRECT", true) ||
-            target.equals("REJECT", true)
-        ) "REJECT" else target
+        val target = RuleTargetResolver.resolve(configText)
+        val abroadAction = target ?: "REJECT"
 
         // 1) 先删除历史注入
         val lines = configText.split("\n")

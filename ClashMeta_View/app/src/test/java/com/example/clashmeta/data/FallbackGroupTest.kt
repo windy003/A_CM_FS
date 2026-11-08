@@ -74,6 +74,49 @@ class FallbackGroupTest {
         assertEquals(setOf("CoffeeCloud"), ruleTargets(out, "DOMAIN-SUFFIX,tiktokcdn.com"))
     }
 
+    /**
+     * 线上真实回归：机场把 TikTok 域名写给 `🚀 节点选择`，而 `🐟 漏网之鱼` 的第一个成员是
+     * 手动粘贴的 VPS 节点（它没有 udp:true，而且经常是挂的）。旧实现把 TikTok 规则改道到
+     * 兜底组，于是 TikTok 打不开、YouTube 正常——Clash 用订阅原规则所以没事。
+     */
+    private val tiktokConfig = """
+        proxies:
+          - {name: HK01, type: trojan, server: hk.a.com, port: 443, password: pw, udp: true}
+          - {name: "45.32.223.27:54061", type: ss, server: 45.32.223.27, port: 54061, cipher: aes-256-gcm, password: pw}
+        proxy-groups:
+          - name: 🚀 节点选择
+            type: select
+            proxies: [HK01]
+          - name: 🐟 漏网之鱼
+            type: select
+            proxies: ["45.32.223.27:54061", 🚀 节点选择, DIRECT]
+        rules:
+          - DOMAIN-KEYWORD,google,🚀 节点选择
+          - DOMAIN-SUFFIX,youtube.com,🚀 节点选择
+          - DOMAIN-SUFFIX,tiktokv.com,🚀 节点选择
+          - MATCH,🐟 漏网之鱼
+    """.trimIndent()
+
+    @Test
+    fun `TikTok 规则不再改道到被手动节点占据的兜底组`() {
+        val out = TikTokRuleManager.patchRules(tiktokConfig)
+
+        assertEquals(setOf("🚀 节点选择"), ruleTargets(out, "DOMAIN-SUFFIX,tiktokv.com"))
+        // 订阅漏掉的补充域名，也应打到主代理组，而不是兜底的 🐟
+        assertEquals(setOf("🚀 节点选择"), ruleTargets(out, "DOMAIN-SUFFIX,ttwstatic.com"))
+    }
+
+    @Test
+    fun `QUIC 规则也不再把境外 UDP 丢给死节点所在组`() {
+        val out = QuicRuleManager.patchRules(tiktokConfig)
+
+        val injected = out.lines().filter { it.contains("DST-PORT,443") }
+        assertEquals(
+            listOf("DIRECT", "🚀 节点选择"),
+            injected.map { it.substringAfterLast(',').trim() }
+        )
+    }
+
     @Test
     fun `QUIC 注入的目标名不带杂字符`() {
         val out = QuicRuleManager.patchRules(quotedConfig)

@@ -96,6 +96,25 @@ class ShareLinkAnyTLSTest {
         assertEquals("我的 AnyTLS", back["name"])
     }
 
+    /**
+     * 分享链接里没有 udp 字段，但导入后必须默认打开：内核里 udp 默认 false，节点被判成不支持
+     * UDP 后「境外 UDP 443 → 代理」这条 QUIC 规则会被整条跳过并回落直连，只走 QUIC 的 TikTok
+     * 直接打不开（YouTube 会退回 TCP，所以看起来像“只有 TikTok 坏了”）。
+     */
+    @Test
+    fun `ss 分享链接导入默认开启 UDP`() {
+        val m = ShareLink.decode("ss://YWVzLTI1Ni1nY206cHc=@1.2.3.4:8388#node")!!
+        assertEquals("ss", m["type"])
+        assertEquals(true, m["udp"])
+    }
+
+    @Test
+    fun `trojan 分享链接导入默认开启 UDP`() {
+        val m = ShareLink.decode("trojan://pw@example.com:443?sni=baidu.com#node")!!
+        assertEquals("trojan", m["type"])
+        assertEquals(true, m["udp"])
+    }
+
     @Test
     fun `encode 给 IPv6 加方括号`() {
         val uri = ShareLink.encode(

@@ -138,6 +138,11 @@ object ShareLink {
         m["port"] = portStr.toIntOrNull() ?: portStr
         m["cipher"] = method
         m["password"] = password
+        // 分享链接不带 udp 字段。内核里 udp 默认 false，节点会被判定为不支持 UDP：
+        // 「境外 UDP 443 → 代理」的 QUIC 规则会被整条跳过并回落到 DIRECT，TikTok 这种
+        // 只走 QUIC、不回退 TCP 的客户端就直接打不开了（YouTube 会退回 TCP，所以看不出问题）。
+        // Clash 系客户端的分享链接解析一律按 udp:true 处理，这里保持一致。
+        m["udp"] = true
 
         parseQuery(query)["plugin"]?.let { if (it.isNotEmpty()) applySSPlugin(m, it) }
         return m
@@ -219,6 +224,7 @@ object ShareLink {
         m["uuid"] = str("id")
         m["alterId"] = str("aid")?.toIntOrNull() ?: 0
         m["cipher"] = str("scy")?.ifEmpty { null } ?: "auto"
+        m["udp"] = true
         val net = str("net") ?: "tcp"
         m["network"] = net
         if (str("tls") == "tls" || str("tls") == "reality") {
@@ -294,6 +300,7 @@ object ShareLink {
         m["server"] = host
         m["port"] = portStr.toIntOrNull() ?: portStr
         m["password"] = password
+        m["udp"] = true
         (qp["sni"] ?: qp["peer"])?.let { if (it.isNotEmpty()) m["sni"] = it }
         if (qp["allowInsecure"] == "1" || qp["allowInsecure"] == "true") m["skip-cert-verify"] = true
         val net = qp["type"]
@@ -358,6 +365,7 @@ object ShareLink {
         m["server"] = host
         m["port"] = portStr.toIntOrNull() ?: portStr
         m["uuid"] = uuid
+        m["udp"] = true
         val security = qp["security"] ?: "none"
         qp["flow"]?.let { if (it.isNotEmpty()) m["flow"] = it }
         if (security == "tls" || security == "reality") {

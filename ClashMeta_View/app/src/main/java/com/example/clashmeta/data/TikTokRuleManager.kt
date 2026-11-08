@@ -8,8 +8,9 @@ package com.example.clashmeta.data
  * 全部堵死(表现为"搜索页缩略图加载不出来")。同时机场规则通常没有 TikTok 专属条目，域名会掉到
  * `GEOIP,CN,DIRECT` 被误判直连。
  *
- * 修法：把 TikTok 相关域名规则注入到 rules **最顶端**(在 QUIC REJECT 之上)，目标指向"兜底代理组"
- * (取自最终 MATCH/FINAL 规则)。这样：
+ * 修法：把 TikTok 相关域名规则注入到 rules **最顶端**(在 QUIC REJECT 之上)，目标由
+ * [RuleTargetResolver] 选出（主代理组，取不到才退回兜底组，绝不能盲目用兜底组——它可能被
+ * 一个不支持 UDP 或已经挂掉的手动节点占据）。这样：
  *   - TikTok 的 UDP 443 先命中域名规则 → 走代理节点(节点均 udp:true，能转发 QUIC)，无需回退 TCP；
  *   - 其它 QUIC 仍落到下面的 REJECT，保持原有屏蔽行为。
  * fake-ip 下 clash 能识别 UDP 连接的真实域名(日志里 UDP 行直接打印 v31-sg.tiktokcdn.com)，故
@@ -42,28 +43,42 @@ object TikTokRuleManager {
         RegexOption.IGNORE_CASE
     )
 
+    /** 该行是否是本类上次注入的规则。[RuleTargetResolver] 投票选目标时要排除它。 */
+    fun isInjectedRule(line: String): Boolean = INJECTED.matches(line)
+
     /**
      * 把 TikTok 域名规则插到 rules 顶部。幂等：多次调用不累积。
-     * 若找不到可用的兜底代理组(如最终是 MATCH,DIRECT)，则不注入(没有代理目标可用)。
+     * 若配置里找不到可用的代理目标(如最终是 MATCH,DIRECT)，则只清掉旧注入、不新增规则。
+     *
+     * 目标不再盲目取兜底组：见 [RuleTargetResolver]。订阅自己已经有同类型同域名的规则时保留
+     * 原规则不动（它排在原位），只补订阅漏掉的那些域名——绝不能把机场写好的分流覆盖掉。
      */
     fun patchRules(configText: String): String {
-        val target = FallbackGroup.resolve(configText)
-        if (target == null || target.equals("DIRECT", true) || target.equals("REJECT", true)) {
-            return configText
-        }
-
         // 1) 先删历史注入
         val lines = configText.split("\n")
             .filterNot { INJECTED.matches(it) }
             .toMutableList()
+        val cleaned = lines.joinToString("\n")
 
-        // 2) 生成规则行
+        val target = RuleTargetResolver.resolve(cleaned) ?: return cleaned
+
+        // 2) 生成规则行，跳过订阅里已有同类型同域名的条目
+        val covered = existingDomainRules(lines)
         val blockIdx = lines.indexOfFirst { TOP_LEVEL_RULES.matches(it) }
         val indent = if (blockIdx >= 0) detectIndent(lines, blockIdx) else "  "
         val newRules = buildList {
-            KEYWORDS.forEach { add("$indent- DOMAIN-KEYWORD,$it,$target") }
-            SUFFIXES.forEach { add("$indent- DOMAIN-SUFFIX,$it,$target") }
+            KEYWORDS.forEach {
+                if (!covered.contains("DOMAIN-KEYWORD,${it.lowercase()}")) {
+                    add("$indent- DOMAIN-KEYWORD,$it,$target")
+                }
+            }
+            SUFFIXES.forEach {
+                if (!covered.contains("DOMAIN-SUFFIX,${it.lowercase()}")) {
+                    add("$indent- DOMAIN-SUFFIX,$it,$target")
+                }
+            }
         }
+        if (newRules.isEmpty()) return cleaned
 
         // 3) 插入(块状 / 内联空 / 缺失 三种情况)
         if (blockIdx >= 0) {
@@ -80,6 +95,38 @@ object TikTokRuleManager {
         lines.add("rules:")
         lines.addAll(newRules)
         return lines.joinToString("\n")
+    }
+
+    /** 一条规则列表项，取出项的内容（不含 `- ` 前缀）。 */
+    private val RULE_ITEM = Regex("^\\s*-\\s+(.*\\S)\\s*$")
+
+    /** `DOMAIN-KEYWORD,x,` / `DOMAIN-SUFFIX,x,` 前缀，只取类型和 payload。 */
+    private val DOMAIN_RULE_HEAD = Regex(
+        "^(DOMAIN(?:-SUFFIX|-KEYWORD)?)\\s*,\\s*([^,]+?)\\s*,",
+        RegexOption.IGNORE_CASE
+    )
+
+    /** 订阅里已有的 DOMAIN-KEYWORD/DOMAIN-SUFFIX 规则，规范化成 `类型,payload`（小写）。 */
+    private fun existingDomainRules(lines: List<String>): Set<String> {
+        val out = HashSet<String>()
+        for (raw in lines) {
+            val item = RULE_ITEM.matchEntire(raw)?.groupValues?.get(1) ?: continue
+            val m = DOMAIN_RULE_HEAD.find(unquote(item.trim())) ?: continue
+            val type = m.groupValues[1].uppercase()
+            val payload = unquote(m.groupValues[2].trim()).lowercase()
+            if (payload.isNotEmpty()) out.add("$type,$payload")
+        }
+        return out
+    }
+
+    /** 去掉两端成对的单/双引号。 */
+    private fun unquote(s: String): String {
+        if (s.length >= 2 &&
+            ((s.first() == '\'' && s.last() == '\'') || (s.first() == '"' && s.last() == '"'))
+        ) {
+            return s.substring(1, s.length - 1)
+        }
+        return s
     }
 
     /**
