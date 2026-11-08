@@ -1,7 +1,11 @@
 package com.example.clashmeta.ui.settings
 
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -10,6 +14,7 @@ import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.example.clashmeta.ClashMetaApp
+import com.example.clashmeta.MainActivity
 import com.example.clashmeta.R
 import com.example.clashmeta.core.ClashVpnService
 import com.example.clashmeta.data.AppProxyManager
@@ -18,10 +23,13 @@ import com.example.clashmeta.data.LanProxyManager
 import com.example.clashmeta.data.ProxyMode
 import com.example.clashmeta.databinding.FragmentSettingsBinding
 import com.example.clashmeta.ui.apps.AppsActivity
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import mobile.Mobile
+import java.io.File
 
 class SettingsFragment : Fragment() {
 
@@ -46,6 +54,8 @@ class SettingsFragment : Fragment() {
             startActivity(Intent(requireContext(), AppsActivity::class.java))
         }
 
+        binding.cardDataPath.setOnClickListener { onSelectFolderClick() }
+
         // 局域网代理开关
         binding.switchLan.isChecked = LanProxyManager.isEnabled(requireContext())
         binding.editPort.setText(LanProxyManager.getPort(requireContext()).toString())
@@ -56,6 +66,116 @@ class SettingsFragment : Fragment() {
         binding.btnApplyPort.setOnClickListener { applyPort() }
 
         setupChainRoute()
+    }
+
+    // ------------------------------------------------ 数据文件夹
+
+    private fun onSelectFolderClick() {
+        val ctx = context ?: return
+        // File API 访问 /sdcard 依赖「所有文件访问权限」；没有权限时连目录都列不出来
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            !Environment.isExternalStorageManager()
+        ) {
+            MaterialAlertDialogBuilder(ctx)
+                .setTitle("需要所有文件访问权限")
+                .setMessage("选择配置文件夹需要读写外部存储。请在系统设置里为本应用开启「所有文件访问权限」。")
+                .setPositiveButton("去设置") { _, _ -> openAllFilesAccessSettings() }
+                .setNegativeButton("取消", null)
+                .show()
+            return
+        }
+
+        FolderPickerDialog.show(ctx, ClashMetaApp.instance.getClashDir()) { dir ->
+            onFolderSelected(dir)
+        }
+    }
+
+    private fun openAllFilesAccessSettings() {
+        val ctx = context ?: return
+        try {
+            startActivity(
+                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                    .setData(Uri.parse("package:${ctx.packageName}"))
+            )
+        } catch (e: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            } catch (e2: Exception) {
+                Toast.makeText(ctx, "无法打开系统设置", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun onFolderSelected(dir: File) {
+        val ctx = context ?: return
+        val oldDir = ClashMetaApp.instance.getClashDir()
+        if (dir.absolutePath == oldDir.absolutePath) {
+            Toast.makeText(ctx, "已经在使用这个文件夹", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val vpnRunning = ClashVpnService.isVpnRunning(ctx)
+        // 新目录里已有 config.yaml 说明用户想用那份配置，不能再把旧数据复制过去覆盖
+        val willCopy = !File(dir, "config.yaml").exists()
+        val message = buildString {
+            append("从\n${oldDir.absolutePath}\n切换到\n${dir.absolutePath}")
+            if (willCopy) append("\n\n新文件夹里还没有配置，会先把当前数据复制过去。")
+            if (vpnRunning) append("\n\nVPN 正在运行，切换后会断开，需要手动重新连接。")
+        }
+
+        MaterialAlertDialogBuilder(ctx)
+            .setTitle("切换数据文件夹")
+            .setMessage(message)
+            .setPositiveButton("切换") { _, _ -> applyFolder(dir, vpnRunning, willCopy) }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun applyFolder(dir: File, vpnRunning: Boolean, copyData: Boolean) {
+        val ctx = context ?: return
+        viewLifecycleOwner.lifecycleScope.launch {
+            if (vpnRunning) {
+                // 运行中的内核还握着旧目录，先断开再切，否则配置要等下次启动才生效
+                (activity as? MainActivity)?.stopVpnService()
+                delay(800)
+            }
+
+            val outcome = withContext(Dispatchers.IO) {
+                runCatching {
+                    val app = ClashMetaApp.instance
+                    val oldDir = app.getClashDir()
+                    if (!dir.exists() && !dir.mkdirs()) {
+                        error("无法创建文件夹 ${dir.absolutePath}")
+                    }
+                    if (!app.isClashDirWritable(dir)) {
+                        error("文件夹不可写：${dir.absolutePath}")
+                    }
+                    val copied = if (copyData) app.migrateUserData(oldDir, dir) else 0
+                    app.setClashDir(dir.absolutePath)
+                    copied
+                }
+            }
+
+            if (_binding == null) return@launch
+            outcome
+                .onSuccess { copied ->
+                    binding.textDataPath.text =
+                        ClashMetaApp.instance.getClashDir().absolutePath
+                    val tip = buildString {
+                        append("已切换到 ${dir.absolutePath}")
+                        if (copied > 0) append("，复制了 $copied 个文件")
+                        if (vpnRunning) append("。VPN 已断开，请重新连接")
+                    }
+                    Toast.makeText(ctx, tip, Toast.LENGTH_LONG).show()
+                }
+                .onFailure { e ->
+                    Toast.makeText(
+                        ctx,
+                        "切换失败：${e.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+        }
     }
 
     // ------------------------------------------------ 全部流量走自己的 VPS（链式）
@@ -216,6 +336,7 @@ class SettingsFragment : Fragment() {
 
     override fun onResume() {
         super.onResume()
+        binding.textDataPath.text = ClashMetaApp.instance.getClashDir().absolutePath
         loadAppProxyInfo()
         updateLanStatus()
         updateChainStatus()
