@@ -1,6 +1,7 @@
 package com.example.clashmeta.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.yaml.snakeyaml.Yaml
@@ -189,5 +190,75 @@ class ManualProxyManagerTest {
         val out = ManualProxyManager.inject(duplicated, listOf(vps))
 
         assertEquals(1, proxyNames(out).count { it == "MyVPS" })
+    }
+
+    /**
+     * 机场订阅的真实写法（wgetcloud）：条目是独占一行的 `-`，字段在下面缩进列出。
+     * 旧版 ENTRY_START 要求横杠后紧跟内容，识别不出这种条目，扫描组时就地错位——把上一个
+     * 组的最后一个成员当成下一个组的开头，新成员按 `proxies:` 键的缩进插入，配置变成
+     * `proxies:\n    - "MyVPS"\n      - DIRECT`，内核报
+     * `yaml: line N: did not find expected key`，VPN 完全起不来。
+     */
+    private val bareDashEntryConfig = """
+        mixed-port: 7890
+        proxies:
+          -
+            name: 机场HK
+            type: ss
+            server: hk.airport.com
+            port: 443
+            cipher: aes-128-gcm
+            password: pw1
+        proxy-groups:
+          -
+            name: 🚀 节点选择
+            type: select
+            proxies:
+              - DIRECT
+              - 🚀 节点选择
+          -
+            name: 🐟 漏网之鱼
+            type: select
+            proxies:
+              - 🚀 节点选择
+              - DIRECT
+        rules:
+          - MATCH,🐟 漏网之鱼
+    """.trimIndent()
+
+    @Test
+    fun `横杠独占一行的组条目也能正确注入`() {
+        val out = ManualProxyManager.inject(bareDashEntryConfig, listOf(vps))
+
+        // 成员缩进必须和订阅原有成员一致，否则整份 YAML 解析失败（这里 load 本身就是断言）
+        assertTrue(proxyNames(out).contains("MyVPS"))
+        assertEquals(listOf("DIRECT", "🚀 节点选择", "MyVPS"), groupMembers(out, "🚀 节点选择"))
+        assertEquals(listOf("🚀 节点选择", "DIRECT", "MyVPS"), groupMembers(out, "🐟 漏网之鱼"))
+        assertTrue("成员不能被插到 proxies: 键的缩进上", out.contains("\n      - \"MyVPS\""))
+    }
+
+    @Test
+    fun `老版本写坏的成员缩进会自愈`() {
+        // 旧版注入留下的现场：成员列表里混着 4 空格和 6 空格两种缩进，内核拒绝解析
+        val corrupted = """
+            mixed-port: 7890
+            proxies:
+              - {name: MyVPS, type: ss, server: 1.2.3.4, port: 8388, cipher: aes-128-gcm, password: pw}
+            proxy-groups:
+              -
+                name: 🚀 节点选择
+                type: select
+                proxies:
+                - "MyVPS"
+                  - DIRECT
+                  - 🚀 节点选择
+            rules:
+              - MATCH,🚀 节点选择
+        """.trimIndent()
+        assertThrows(Exception::class.java) { Yaml().load<Any?>(corrupted) }
+
+        val out = ManualProxyManager.inject(corrupted, listOf(vps))
+
+        assertEquals(listOf("MyVPS", "DIRECT", "🚀 节点选择"), groupMembers(out, "🚀 节点选择"))
     }
 }

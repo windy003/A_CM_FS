@@ -113,6 +113,44 @@ class ChainRouteManagerTest {
         assertEquals("2022-blake3-aes-128-gcm", proxy(out, "MyVPS")["cipher"])
     }
 
+    /** 机场订阅的另一种 block 写法：横杠独占一行，字段在下面缩进列出（wgetcloud 等）。 */
+    private val bareDashConfig = """
+        mixed-port: 7890
+        proxies:
+          -
+            name: 机场HK
+            type: ss
+            server: hk.airport.com
+            port: 443
+            cipher: aes-128-gcm
+            password: pw1
+            udp: true
+          -
+            name: MyVPS
+            type: ss
+            server: 1.2.3.4
+            port: 8388
+            cipher: 2022-blake3-aes-128-gcm
+            password: pw2
+            udp: true
+        proxy-groups:
+          -
+            name: ♻️ 自动选择
+            type: url-test
+            proxies:
+              - 机场HK
+        rules:
+          - MATCH,♻️ 自动选择
+    """.trimIndent()
+
+    @Test
+    fun `横杠独占一行的节点也能挂上 dialer-proxy`() {
+        val out = run(bareDashConfig).text
+
+        assertEquals(group, proxy(out, "MyVPS")["dialer-proxy"])
+        assertNull(proxy(out, "机场HK")["dialer-proxy"])
+    }
+
     @Test
     fun `总开关把全部流量指向出口节点`() {
         val r = rules(run(flowConfig).text)

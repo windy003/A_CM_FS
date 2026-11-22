@@ -37,7 +37,16 @@ object ManualProxyManager {
     private val TOP_LEVEL_PROXIES = Regex("^proxies:\\s*$")
     private val INLINE_EMPTY_PROXIES = Regex("^proxies:\\s*\\[\\s*]\\s*$")
     private val TOP_LEVEL_GROUPS = Regex("^proxy-groups:\\s*$")
-    private val ENTRY_START = Regex("^(\\s*)-\\s+\\S.*$")
+
+    /**
+     * 一个条目的起始：`- name: xxx`（横杠与字段同行），或单独一行 `-`
+     * （wgetcloud 等机场的 block 写法：横杠独占一行，字段在下面缩进列出）。
+     *
+     * 只认 `-\s+\S` 会漏掉后一种写法，扫描组条目时就地错位——把上一个组的最后一个成员
+     * 当成下一个组的开头，新成员被按 `proxies:` 键的缩进插进去，整份 YAML 解析失败
+     * （内核报 `yaml: line N: did not find expected key`）。
+     */
+    private val ENTRY_START = Regex("^(\\s*)-(?:\\s+\\S.*|\\s*)$")
     private val LIST_ITEM_INDENT = Regex("^(\\s*)-.*$")
     private val SELECT_TYPE = Regex("\\btype:\\s*select\\b", RegexOption.IGNORE_CASE)
 
@@ -150,9 +159,11 @@ object ManualProxyManager {
      *   2. 把节点名加进所有 select 组，否则用户在节点页点它时 `selectProxy` 会因为不是组成员而失败。
      */
     fun inject(configText: String, nodes: List<Map<String, Any?>>): String {
-        if (nodes.isEmpty()) return configText
         return try {
-            var lines = configText.split("\n").toMutableList()
+            // 自愈优先于一切：老版本注入留下的缩进错位会让整份配置解析失败，
+            // 此时连「手动节点是否已存在」都判断不了。修复与 nodes 是否为空无关。
+            var lines = repairMemberIndents(configText.split("\n")).toMutableList()
+            if (nodes.isEmpty()) return lines.joinToString("\n")
 
             // 0) 自愈：老版本可能已经把同一个手动节点重复注入过（内核会以
             //    "proxy xxx is the duplicate name" 拒绝整份配置、VPN 起不来），
@@ -175,6 +186,63 @@ object ManualProxyManager {
             Log.e(TAG, "inject failed", e)
             configText
         }
+    }
+
+    /**
+     * 修复代理组成员列表的缩进错位。
+     *
+     * 旧版 [ENTRY_START] 识别不出「横杠独占一行」的组条目，扫描时把上一个组的最后一个成员
+     * 当成了下一个组的开头，[appendMembers] 便在错误的范围里找不到现有成员，于是按
+     * `proxies:` 键的缩进插入了新成员：
+     *
+     *     proxies:
+     *     - "SS-35472"      ← 4 空格，和键同列
+     *       - DIRECT         ← 6 空格，订阅原有成员
+     *
+     * 同一个序列里的列表项缩进必须一致，内核会直接报
+     * `yaml: line N: did not find expected key`，VPN 起不来。这里按多数表决把成员行统一到
+     * 订阅原有的缩进上，让已经中招的配置自愈（正常配置原样返回）。
+     */
+    private fun repairMemberIndents(lines: List<String>): List<String> {
+        val range = blockRange(lines, TOP_LEVEL_GROUPS) ?: return lines
+        val out = lines.toMutableList()
+        var i = range.first
+        while (i <= range.last) {
+            val key = PROXIES_BLOCK.find(out[i])
+            if (key == null) {
+                i++
+                continue
+            }
+            val keyIndent = key.groupValues[1]
+
+            // 收集紧跟 `proxies:` 的成员行，直至块尾或缩进更浅的条目（下一个组）。
+            val members = ArrayList<Int>()
+            val counts = HashMap<String, Int>()
+            var j = i + 1
+            while (j <= range.last) {
+                val line = out[j]
+                if (line.isBlank()) {
+                    j++
+                    continue
+                }
+                val m = LIST_ITEM_INDENT.matchEntire(line) ?: break
+                val indent = m.groupValues[1]
+                if (indent.length < keyIndent.length) break
+                members.add(j)
+                counts[indent] = (counts[indent] ?: 0) + 1
+                j++
+            }
+
+            // 只有出现两种以上缩进才说明被写坏了；统一到多数成员用的那一种。
+            if (counts.size > 1) {
+                val target = counts.maxByOrNull { it.value }!!.key
+                for (idx in members) {
+                    out[idx] = target + out[idx].trimStart()
+                }
+            }
+            i = if (j > i) j else i + 1
+        }
+        return out
     }
 
     /** 收集 `proxies:` 块里已有的节点名（行级扫描，不做整份解析）。 */

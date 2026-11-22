@@ -117,7 +117,14 @@ object ChainRouteManager {
     private val INLINE_EMPTY_RULES = Regex("^rules:\\s*\\[\\s*]\\s*$")
     private val TOP_LEVEL_PROXIES = Regex("^proxies:\\s*$")
     private val LIST_ITEM_INDENT = Regex("^(\\s*)-.*$")
-    private val ENTRY_START = Regex("^(\\s*)-\\s+\\S.*$")
+
+    /**
+     * 一个节点条目的起始：`- {name: ...}` / `- name: ...`（横杠与字段同行），
+     * 或单独一行 `-`（wgetcloud 等机场的 block 写法：横杠独占一行，字段在下面缩进列出）。
+     * 只认 `-\s+\S` 会漏掉后一种写法，出口节点就永远挂不上 dialer-proxy，
+     * 表现为「链式代理总开关开着，但前置跳没生效」。
+     */
+    private val ENTRY_START = Regex("^(\\s*)-(?:\\s+\\S.*|\\s*)$")
 
     /** block 风格里独占一行的 dialer-proxy。 */
     private val BLOCK_DIALER_LINE = Regex("^\\s+dialer-proxy:\\s*.*$")
