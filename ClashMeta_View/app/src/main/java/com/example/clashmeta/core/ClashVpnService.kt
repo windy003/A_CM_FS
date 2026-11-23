@@ -84,6 +84,8 @@ class ClashVpnService : VpnService() {
                 if (!configFile.exists()) return false
                 // 与正式启动保持一致的配置注入，避免解析差异
                 com.example.clashmeta.data.LanProxyManager.applyToConfigFile()
+                // 应用启动时可能因存储权限等原因没装成功，这里在 IO 线程再兜一次
+                com.example.clashmeta.data.GeoDataInstaller.ensureGeoIp(context)
                 if (Mobile.isRunning()) {
                     // 已在运行；若只是预览态则刷新配置以反映最新订阅
                     if (!isVpnRunning(context)) {
@@ -200,6 +202,9 @@ class ClashVpnService : VpnService() {
                 // 初始化 Clash 核心
                 val clashDir = ClashMetaApp.instance.getClashDir()
                 Log.d(TAG, "Initializing Clash with home dir: ${clashDir.absolutePath}")
+
+                // GEOIP 数据库必须在解析配置前就位，否则内核会尝试直连 GitHub 下载
+                com.example.clashmeta.data.GeoDataInstaller.ensureGeoIp(this@ClashVpnService, clashDir)
 
                 try {
                     Mobile.init(clashDir.absolutePath)

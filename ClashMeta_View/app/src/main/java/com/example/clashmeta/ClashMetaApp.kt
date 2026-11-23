@@ -50,6 +50,10 @@ class ClashMetaApp : Application() {
             if (!clashDir.exists()) {
                 clashDir.mkdirs()
             }
+            // 先把内置的 GeoIP 数据库放到工作目录：内核解析 GEOIP 规则时若发现缺失，
+            // 会在建 VPN 之前去 GitHub 下载，墙内必然失败、整份配置都加载不了。
+            // 首次安装时复制约 8MB；之后只做一次尾部校验，开销可以忽略。
+            com.example.clashmeta.data.GeoDataInstaller.ensureGeoIp(this, clashDir)
             Mobile.init(clashDir.absolutePath)
         } catch (e: Exception) {
             e.printStackTrace()
